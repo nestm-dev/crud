@@ -48,8 +48,8 @@ importers:
         specifier: 26.1.2
         version: 26.1.2
       '@types/pg':
-        specifier: 8.15.5
-        version: 8.15.5
+        specifier: 8.20.0
+        version: 8.20.0
       '@types/supertest':
         specifier: 7.2.1
         version: 7.2.1
@@ -61,7 +61,7 @@ importers:
         version: 10.1.0
       drizzle-orm:
         specifier: 0.45.2
-        version: 0.45.2(@electric-sql/pglite@0.4.3)(@prisma/client@7.9.1(prisma@7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2))(typescript@6.0.2))(@types/pg@8.15.5)(mysql2@3.15.3)(pg@8.16.3)(postgres@3.4.7)(prisma@7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2))
+        version: 0.45.2(@electric-sql/pglite@0.4.3)(@prisma/client@7.9.1(prisma@7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2))(typescript@6.0.2))(@types/pg@8.20.0)(mysql2@3.15.3)(pg@8.22.0)(postgres@3.4.7)(prisma@7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2))
       express:
         specifier: 5.2.1
         version: 5.2.1(supports-color@7.2.0)
@@ -75,8 +75,8 @@ importers:
         specifier: 7.0.2001
         version: 7.0.2001
       pg:
-        specifier: 8.16.3
-        version: 8.16.3
+        specifier: 8.22.0
+        version: 8.22.0
       prettier:
         specifier: 3.9.6
         version: 3.9.6
@@ -100,7 +100,7 @@ importers:
         version: 0.22.14(@arethetypeswrong/core@0.18.5)(publint@0.3.22)(typescript@6.0.2)
       typeorm:
         specifier: 1.1.0
-        version: 1.1.0(mysql2@3.15.3)(pg@8.16.3)(supports-color@7.2.0)
+        version: 1.1.0(mysql2@3.15.3)(pg@8.22.0)(supports-color@7.2.0)
       typescript:
         specifier: 6.0.2
         version: 6.0.2
@@ -2418,6 +2418,15 @@ packages:
       pg-native:
         optional: true
 
+  pg@8.22.0:
+    resolution: {integrity: sha512-8wih1vVIBMxoUM2oB4soJsD9tDnDpLv4OXBJ+EJzFsvycD+lfyIreC2gGHq78f8jbLLt+bvlPTFdFZfJkOuzAA==}
+    engines: {node: '>= 16.0.0'}
+    peerDependencies:
+      pg-native: '>=3.0.1'
+    peerDependenciesMeta:
+      pg-native:
+        optional: true
+
   pgpass@1.0.5:
     resolution: {integrity: sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug==}
 
@@ -3674,7 +3683,7 @@ snapshots:
     dependencies:
       '@prisma/driver-adapter-utils': 7.9.1
       '@types/pg': 8.20.0
-      pg: 8.16.3
+      pg: 8.22.0
       postgres-array: 3.0.4
     transitivePeerDependencies:
       - pg-native
@@ -3969,6 +3978,7 @@ snapshots:
       '@types/node': 26.1.2
       pg-protocol: 1.15.0
       pg-types: 2.2.0
+    optional: true
 
   '@types/pg@8.20.0':
     dependencies:
@@ -4525,6 +4535,16 @@ snapshots:
       '@types/pg': 8.15.5
       mysql2: 3.15.3
       pg: 8.16.3
+      postgres: 3.4.7
+      prisma: 7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2)
+
+  drizzle-orm@0.45.2(@electric-sql/pglite@0.4.3)(@prisma/client@7.9.1(prisma@7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2))(typescript@6.0.2))(@types/pg@8.20.0)(mysql2@3.15.3)(pg@8.22.0)(postgres@3.4.7)(prisma@7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2)):
+    optionalDependencies:
+      '@electric-sql/pglite': 0.4.3
+      '@prisma/client': 7.9.1(prisma@7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2))(typescript@6.0.2)
+      '@types/pg': 8.20.0
+      mysql2: 3.15.3
+      pg: 8.22.0
       postgres: 3.4.7
       prisma: 7.9.1(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.2)
 
@@ -5253,6 +5273,11 @@ snapshots:
   pg-pool@3.14.0(pg@8.16.3):
     dependencies:
       pg: 8.16.3
+    optional: true
+
+  pg-pool@3.14.0(pg@8.22.0):
+    dependencies:
+      pg: 8.22.0
 
   pg-protocol@1.15.0: {}
 
@@ -5268,6 +5293,17 @@ snapshots:
     dependencies:
       pg-connection-string: 2.14.0
       pg-pool: 3.14.0(pg@8.16.3)
+      pg-protocol: 1.15.0
+      pg-types: 2.2.0
+      pgpass: 1.0.5
+    optionalDependencies:
+      pg-cloudflare: 1.4.0
+    optional: true
+
+  pg@8.22.0:
+    dependencies:
+      pg-connection-string: 2.14.0
+      pg-pool: 3.14.0(pg@8.22.0)
       pg-protocol: 1.15.0
       pg-types: 2.2.0
       pgpass: 1.0.5
@@ -5799,6 +5835,25 @@ snapshots:
     optionalDependencies:
       mysql2: 3.15.3
       pg: 8.16.3
+    transitivePeerDependencies:
+      - babel-plugin-macros
+      - supports-color
+
+  typeorm@1.1.0(mysql2@3.15.3)(pg@8.22.0)(supports-color@7.2.0):
+    dependencies:
+      '@sqltools/formatter': 1.2.5
+      ansis: 4.3.1
+      dayjs: 1.11.21
+      debug: 4.4.3(supports-color@7.2.0)
+      dedent: 1.7.2
+      reflect-metadata: 0.2.2
+      sql-highlight: 6.1.0
+      tinyglobby: 0.2.17
+      tslib: 2.8.1
+      yargs: 18.1.0
+    optionalDependencies:
+      mysql2: 3.15.3
+      pg: 8.22.0
     transitivePeerDependencies:
       - babel-plugin-macros
       - supports-color
