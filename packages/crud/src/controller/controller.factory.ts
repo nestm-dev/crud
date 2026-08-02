@@ -344,6 +344,7 @@ function applyEnhancers(
 			(decorator as MethodDecorator)(target, propertyKey, descriptor);
 		}
 	};
+	for (const decorator of enhancers.decorators ?? []) apply(decorator);
 	if ((enhancers.guards?.length ?? 0) > 0) apply(UseGuards(...enhancers.guards!));
 	if ((enhancers.interceptors?.length ?? 0) > 0) apply(UseInterceptors(...enhancers.interceptors!));
 	if ((enhancers.pipes?.length ?? 0) > 0) apply(UsePipes(...enhancers.pipes!));

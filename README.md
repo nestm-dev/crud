@@ -26,8 +26,8 @@ registers guards, pipes, interceptors, or filters globally.
 ## Install
 
 ```sh
-pnpm add @nestm/crud @nestm/crud-memory
-pnpm add @nestm/standard-schema @standard-schema/spec @nestjs/swagger
+pnpm add @nestm/crud@alpha @nestm/crud-memory@alpha
+pnpm add @nestm/standard-schema@alpha @standard-schema/spec @nestjs/swagger
 ```
 
 Install and pin the NestJS 12 prerelease packages tested by your application.
@@ -265,15 +265,18 @@ Normal reads exclude deleted records. `deleted=include|only` is accepted only
 when `allowQueryDeleted` is true. `queryDeletedEnhancers` decorate the generated
 list route, so guards must inspect the request and require elevated access only
 when `deleted` is `include` or `only`; ordinary list requests must still pass.
-Scope and soft-delete values flow through `mappings.persistence`, allowing
-logical fields to map safely to different persistence keys.
+Soft-delete and explicit scope `updateValues` flow through
+`mappings.persistence`, allowing logical fields to map safely to different
+persistence keys.
 
 ## Scopes and hooks
 
 Resource scopes are ordered injectable providers. Their predicates apply to
-list/count/read/update/delete/restore and relation queries. Scope-created field
-values overwrite client values, which supports tenant and owner isolation while
-leaving authentication and coarse authorization to normal Nest guards.
+list/count/read/update/delete/restore and relation queries. Scope `createValues`
+overwrite client values only while inserting, which supports tenant and owner
+isolation without making immutable ownership updateable. A scope that
+intentionally owns an update field must return it through distinct
+`updateValues`.
 
 Mutation hooks run in this order:
 
@@ -289,6 +292,23 @@ Register scope and hook provider tokens on the resource and make those providers
 available through the feature module's imports. A hook failure before commit
 rolls back the mutation; an `afterCommit` failure is sent to
 `afterCommitErrorHandler` after the committed response has been determined.
+An adapter transaction must resolve only after the real commit it owns; a
+savepoint or joined ambient transaction cannot satisfy this mutation contract.
+
+Generated routes can also carry integration-specific Nest metadata without a
+CRUD dependency on that integration:
+
+```ts
+enhancers: { decorators: [ApiTenant()] },
+operations: crudOperations.all({
+	list: { decorators: [RequirePermission("document:list")] },
+	read: { decorators: [RequirePermission("document:read")] },
+}),
+```
+
+Resource decorators are applied to the generated controller. Operation and
+`queryDeletedEnhancers` decorators are applied to their generated handlers.
+Decorator arrays are copied and frozen when the resource is defined.
 
 ## Relations
 
@@ -328,6 +348,12 @@ create, find-one, find-page/count, update, and delete. Bindings must map API
 create/update values to persistence fields and persistence records to response
 DTO inputs; ORM entities never escape automatically.
 
+`CrudAdapterError.retryable` distinguishes conflicts for which the complete
+operation may be retried in a fresh transaction. CRUD never retries operations
+itself because doing so could repeat lifecycle-hook side effects. Use
+`isCrudAdapterError()` instead of `instanceof` at package boundaries so errors
+remain recognizable when a package manager installs more than one CRUD copy.
+
 Application binders are `bindMemoryCrud`, `bindTypeOrmCrud`,
 `bindDrizzleCrud`, and `bindPrismaCrud`. Each accepts standard Nest `useValue`,
 `useClass`, `useExisting`, or `useFactory` adapter providers. The SQL binders
@@ -335,9 +361,22 @@ never create, initialize, connect, disconnect, or destroy consumer-owned
 repositories and clients. In the first alpha, TypeORM 1.1.x, Drizzle 0.45.x,
 and Prisma 7.9.x are certified against PostgreSQL only.
 
-Every binding supplies four mappings: `create` and `update` map API values,
-`persistence` maps framework-generated scope/soft-delete values, and `response`
-maps a record plus loaded relations into the response-schema input.
+Every binding supplies four required mappings: `create` and `update` map API
+values, `persistence` maps framework-generated update/soft-delete values, and
+`response` maps a record plus loaded relations into the response-schema input.
+Scoped bindings should additionally define `scopeCreate` to map their logical
+create values to adapter insert fields.
+
+When a scope owns required insert columns such as `tenantId` or `ownerId`, set
+`scopeCreateFields: ["tenantId", "ownerId"]`. Only those declared fields become
+optional in the contextual return type of `mappings.create`; an unscoped binding
+still has to return its complete adapter create model. On create, the declared
+fields must be materialized by `mappings.scopeCreate`, and those scope-derived
+values overwrite any values returned by the API mapper.
+
+For compatibility, a scoped binding without `scopeCreate` falls back to
+`persistence`. That legacy path cannot model immutable insert-only fields and is
+deprecated for removal in the next major version.
 
 Reusable, runner-neutral conformance cases are available from
 `@nestm/crud/testing` as `createCrudAdapterConformanceCases` and

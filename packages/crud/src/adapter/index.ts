@@ -1,9 +1,15 @@
-export { CrudAdapterError, type CrudAdapterErrorCode } from "./adapter.error.ts";
+export {
+	CrudAdapterError,
+	isCrudAdapterError,
+	type CrudAdapterErrorCode,
+} from "./adapter.error.ts";
 export {
 	defineCrudBinding,
 	isCrudBinding,
 	type CrudAdapterProvider,
 	type CrudBindingMappings,
+	type CrudCreateMappingValues,
+	type CrudScopeCreateField,
 	type CompleteCrudFieldSelection,
 	type DefineCrudBindingOptions,
 	type MissingCrudBindingFields,

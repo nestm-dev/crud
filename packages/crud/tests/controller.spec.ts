@@ -174,6 +174,39 @@ describe("generated CRUD controller metadata", () => {
 		expect(Reflect.getMetadata(METHOD_METADATA, controller.prototype.create)).toBeUndefined();
 		expect(Reflect.getMetadata(METHOD_METADATA, controller.prototype.delete)).toBeUndefined();
 	});
+
+	it("applies opaque decorators to the controller and generated handlers", () => {
+		const classDecorator: ClassDecorator = (target) => {
+			Reflect.defineMetadata("test:resource-decorator", true, target);
+		};
+		const operationDecorator: MethodDecorator = (_target, _propertyKey, descriptor) => {
+			Reflect.defineMetadata("test:operation-decorator", true, descriptor.value as object);
+		};
+		const deletedDecorator: MethodDecorator = (_target, _propertyKey, descriptor) => {
+			Reflect.defineMetadata("test:deleted-decorator", true, descriptor.value as object);
+		};
+		const resource = defineCrudResource({
+			...routeResource,
+			name: "decorated-items",
+			path: "decorated-items",
+			enhancers: { decorators: [classDecorator] },
+			operations: {
+				list: { decorators: [operationDecorator] },
+			},
+			softDelete: {
+				...routeResource.softDelete!,
+				queryDeletedEnhancers: { decorators: [deletedDecorator] },
+			},
+		});
+		const controller = createCrudController(resource);
+
+		expect(Reflect.getMetadata("test:resource-decorator", controller)).toBe(true);
+		expect(Reflect.getMetadata("test:operation-decorator", controller.prototype.list)).toBe(true);
+		expect(Reflect.getMetadata("test:deleted-decorator", controller.prototype.list)).toBe(true);
+		expect(
+			Reflect.getMetadata("test:operation-decorator", controller.prototype.read),
+		).toBeUndefined();
+	});
 });
 
 interface SwaggerParameterMetadata {

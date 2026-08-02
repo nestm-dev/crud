@@ -18,6 +18,8 @@ export const CRUD_OPERATION_NAMES = [
 export type CrudOperationName = (typeof CRUD_OPERATION_NAMES)[number];
 
 export interface CrudEnhancers {
+	/** Opaque Nest decorators applied to the generated controller or handler. */
+	readonly decorators?: readonly (ClassDecorator | MethodDecorator)[];
 	readonly guards?: readonly Type<CanActivate>[];
 	readonly interceptors?: readonly Type<NestInterceptor>[];
 	readonly pipes?: readonly Type<PipeTransform>[];

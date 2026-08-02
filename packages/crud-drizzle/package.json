@@ -55,7 +55,7 @@
 		"lint": "oxlint --type-aware .",
 		"format": "prettier --write . --ignore-unknown",
 		"format:check": "prettier --check . --ignore-unknown",
-		"test": "vitest run",
+		"test": "vitest run --root ../.. --config vitest.config.ts packages/crud-drizzle",
 		"verify:pack": "pnpm run build && publint --strict",
 		"prepack": "pnpm run build"
 	},

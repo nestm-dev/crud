@@ -61,6 +61,11 @@ export interface CrudAdapter<
 	UpdateValues extends object = object,
 > {
 	readonly capabilities: CrudAdapterCapabilities;
+	/**
+	 * Runs work in a transaction and resolves only after the real commit succeeds.
+	 * A mutation must not resolve after merely releasing a savepoint or joining an
+	 * ambient transaction because CRUD emits `afterCommit` after this promise.
+	 */
 	transaction<Result>(
 		work: (session: CrudAdapterSession) => Promise<Result>,
 		context: CrudAdapterContext,

@@ -9,6 +9,7 @@ assert.equal(typeof crud.CrudModule, "function");
 assert.equal(typeof crud.defineCrudResource, "function");
 assert.equal(typeof adapter.defineCrudBinding, "function");
 assert.equal(typeof adapter.CrudAdapterError, "function");
+assert.equal(typeof adapter.isCrudAdapterError, "function");
 assert.equal(typeof testing.runCrudAdapterConformance, "function");
 assert.equal(typeof testing.InsecureCrudCursorCodec, "function");
 

@@ -1,4 +1,4 @@
-import { CrudAdapterError } from "@nestm/crud/adapter";
+import { CrudAdapterError, isCrudAdapterError } from "@nestm/crud/adapter";
 import type {
 	CrudAdapter,
 	CrudAdapterContext,
@@ -55,6 +55,7 @@ function postgresCode(error: unknown): string | undefined {
 }
 
 function databaseError(error: unknown): CrudAdapterError {
+	if (isCrudAdapterError(error)) return error;
 	const code = postgresCode(error);
 	if (code === "23505") {
 		return new CrudAdapterError(
@@ -126,7 +127,7 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 				return work({ adapter: this.#sessionMarker, value: manager });
 			});
 		} catch (error) {
-			if (error instanceof CrudAdapterError) throw error;
+			if (isCrudAdapterError(error)) throw error;
 			// Preserve application/hook errors; only sanitize recognizable database failures here.
 			if (error instanceof QueryFailedError || postgresCode(error) !== undefined)
 				throw databaseError(error);

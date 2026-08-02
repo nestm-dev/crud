@@ -29,17 +29,49 @@ export type CrudAdapterProvider<
 	  }
 	| CrudCompatibleFactoryProvider<CrudAdapter<RecordType, CreateValues, UpdateValues>>;
 
+/** Adapter insert fields that are materialized from scope-owned logical values. */
+export type CrudScopeCreateField<
+	CreateValues extends object,
+	_UpdateValues extends object = object,
+> = Extract<keyof CreateValues, string>;
+
+/**
+ * Values returned by an API create mapper before scope-owned persistence fields are merged.
+ * Unscoped bindings use the default `never` and therefore still require `CreateValues` in full.
+ */
+export type CrudCreateMappingValues<
+	CreateValues extends object,
+	ScopeCreateField extends keyof CreateValues = never,
+> = Omit<CreateValues, ScopeCreateField> & Partial<Pick<CreateValues, ScopeCreateField>>;
+
 export interface CrudBindingMappings<
 	Resource extends AnyCrudResource = AnyCrudResource,
 	RecordType = unknown,
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	ScopeCreateField extends keyof CreateValues = never,
 > {
-	create(input: CrudCreate<Resource>): CreateValues | Promise<CreateValues>;
+	create(
+		input: CrudCreate<Resource>,
+	):
+		| CrudCreateMappingValues<CreateValues, ScopeCreateField>
+		| Promise<CrudCreateMappingValues<CreateValues, ScopeCreateField>>;
+	/**
+	 * Maps logical values supplied by CRUD scopes to adapter insert fields.
+	 *
+	 * Define this mapping for new scoped bindings. For compatibility, bindings
+	 * that omit it fall back to `persistence`, but that fallback cannot express
+	 * immutable insert-only fields and will be removed in the next major release.
+	 */
+	scopeCreate?(
+		values: CrudValues,
+	):
+		| Partial<Pick<CreateValues, ScopeCreateField>>
+		| Promise<Partial<Pick<CreateValues, ScopeCreateField>>>;
 	update(input: CrudUpdate<Resource>): UpdateValues | Promise<UpdateValues>;
 	/**
-	 * Maps framework-generated logical field values (scopes and soft delete) to the
-	 * adapter's update input. Scope values are merged over the mapped create/update input.
+	 * Maps framework-generated logical update values (explicit scope `updateValues`
+	 * and soft delete) to the adapter's update input.
 	 */
 	persistence(values: CrudValues): UpdateValues | Promise<UpdateValues>;
 	response(
@@ -54,6 +86,7 @@ export interface CrudResourceBinding<
 	Fields extends readonly string[] = readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	ScopeCreateField extends keyof CreateValues = never,
 > {
 	readonly [CRUD_BINDING]: true;
 	readonly resource: Resource;
@@ -63,8 +96,11 @@ export interface CrudResourceBinding<
 		Resource,
 		NoInfer<RecordType>,
 		NoInfer<CreateValues>,
-		NoInfer<UpdateValues>
+		NoInfer<UpdateValues>,
+		NoInfer<ScopeCreateField>
 	>;
+	/** Adapter insert fields supplied by scopes through `mappings.scopeCreate`. */
+	readonly scopeCreateFields?: readonly string[];
 	readonly fields: Fields;
 }
 
@@ -89,11 +125,28 @@ export type DefineCrudBindingOptions<
 	Fields extends readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[] =
+		readonly [],
 > = Omit<
-	CrudResourceBinding<Resource, RecordType, Fields, CreateValues, UpdateValues>,
-	typeof CRUD_BINDING
-> &
-	CompleteCrudFieldSelection<Resource, Fields>;
+	CrudResourceBinding<
+		Resource,
+		RecordType,
+		Fields,
+		CreateValues,
+		UpdateValues,
+		ScopeCreateFields[number]
+	>,
+	typeof CRUD_BINDING | "mappings" | "scopeCreateFields"
+> & {
+	readonly mappings: CrudBindingMappings<
+		Resource,
+		NoInfer<RecordType>,
+		NoInfer<CreateValues>,
+		NoInfer<UpdateValues>,
+		NoInfer<ScopeCreateFields[number]>
+	>;
+	readonly scopeCreateFields?: ScopeCreateFields;
+} & CompleteCrudFieldSelection<Resource, Fields>;
 
 export function defineCrudBinding<
 	Resource extends AnyCrudResource,
@@ -101,9 +154,26 @@ export function defineCrudBinding<
 	const Fields extends readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	const ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[] =
+		readonly [],
 >(
-	options: DefineCrudBindingOptions<Resource, RecordType, Fields, CreateValues, UpdateValues>,
-): CrudResourceBinding<Resource, RecordType, Fields, CreateValues, UpdateValues> {
+	options: DefineCrudBindingOptions<
+		Resource,
+		RecordType,
+		Fields,
+		CreateValues,
+		UpdateValues,
+		ScopeCreateFields
+	>,
+): CrudResourceBinding<
+	Resource,
+	RecordType,
+	Fields,
+	CreateValues,
+	UpdateValues,
+	ScopeCreateFields[number]
+> {
+	const { scopeCreateFields, ...bindingOptions } = options;
 	const adapter = Object.freeze({
 		...options.adapter,
 		...("inject" in options.adapter && options.adapter.inject !== undefined
@@ -111,13 +181,23 @@ export function defineCrudBinding<
 			: {}),
 	}) as CrudAdapterProvider<RecordType, CreateValues, UpdateValues>;
 	return Object.freeze({
-		...options,
+		...bindingOptions,
 		...(options.imports === undefined ? {} : { imports: Object.freeze([...options.imports]) }),
 		adapter,
 		mappings: Object.freeze({ ...options.mappings }),
+		...(scopeCreateFields === undefined
+			? {}
+			: { scopeCreateFields: Object.freeze([...scopeCreateFields]) }),
 		fields: Object.freeze([...options.fields]) as unknown as Fields,
 		[CRUD_BINDING]: true as const,
-	});
+	}) as unknown as CrudResourceBinding<
+		Resource,
+		RecordType,
+		Fields,
+		CreateValues,
+		UpdateValues,
+		ScopeCreateFields[number]
+	>;
 }
 
 export function isCrudBinding(value: unknown): value is CrudResourceBinding {

@@ -108,6 +108,48 @@ interface NativeUpdateValues {
 
 declare const nativeAdapter: CrudAdapter<NativeRecord, NativeCreateValues, NativeUpdateValues>;
 
+interface ImmutableScopeRecord {
+	readonly id: number;
+	readonly owner_id: string;
+	readonly display_label: string;
+}
+
+interface ImmutableScopeCreateValues {
+	readonly owner_id: string;
+	readonly display_label: string;
+}
+
+interface ImmutableScopeUpdateValues {
+	readonly display_label?: string;
+}
+
+declare const immutableScopeAdapter: CrudAdapter<
+	ImmutableScopeRecord,
+	ImmutableScopeCreateValues,
+	ImmutableScopeUpdateValues
+>;
+
+// Scope-owned fields may be immutable insert-only fields that the update model rejects.
+export const immutableScopeBinding = defineCrudBinding({
+	resource: typedResource,
+	adapter: { useValue: immutableScopeAdapter },
+	fields: ["tenantId", "id", "label", "count"],
+	scopeCreateFields: ["owner_id"],
+	mappings: {
+		create: (input) => ({ display_label: input.label }),
+		scopeCreate: (values) =>
+			typeof values.ownerId === "string" ? { owner_id: values.ownerId } : {},
+		update: (input) => (input.label === undefined ? {} : { display_label: input.label }),
+		persistence: () => ({}),
+		response: (record) => ({
+			tenantId: record.owner_id,
+			id: record.id,
+			label: record.display_label,
+			count: 0,
+		}),
+	},
+});
+
 export const persistenceTypedBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: nativeAdapter },

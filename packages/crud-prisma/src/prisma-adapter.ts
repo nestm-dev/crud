@@ -1,4 +1,4 @@
-import { CrudAdapterError } from "@nestm/crud/adapter";
+import { CrudAdapterError, isCrudAdapterError } from "@nestm/crud/adapter";
 import type {
 	CrudAdapter,
 	CrudAdapterContext,
@@ -109,6 +109,7 @@ function prismaCode(error: unknown): string | undefined {
 }
 
 function databaseError(error: unknown): CrudAdapterError {
+	if (isCrudAdapterError(error)) return error;
 	const code = prismaCode(error);
 	if (code === "P2002") {
 		return new CrudAdapterError(
@@ -200,7 +201,7 @@ export class PrismaCrudAdapter<
 				return work({ adapter: this.#sessionMarker, value: transaction });
 			});
 		} catch (error) {
-			if (error instanceof CrudAdapterError) throw error;
+			if (isCrudAdapterError(error)) throw error;
 			if (prismaCode(error) !== undefined) throw databaseError(error);
 			throw error;
 		} finally {

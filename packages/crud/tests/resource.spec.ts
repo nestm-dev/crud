@@ -49,6 +49,34 @@ describe("defineCrudResource", () => {
 		expect(Object.isFrozen(resource.query?.filters?.name?.operators)).toBe(true);
 	});
 
+	it("snapshots decorator enhancer arrays at every supported level", () => {
+		const noopDecorator: ClassDecorator & MethodDecorator = () => undefined;
+		const resourceDecorators: (ClassDecorator | MethodDecorator)[] = [noopDecorator];
+		const operationDecorators: (ClassDecorator | MethodDecorator)[] = [noopDecorator];
+		const deletedDecorators: (ClassDecorator | MethodDecorator)[] = [noopDecorator];
+		const resource = defineCrudResource({
+			...validDefinition(),
+			enhancers: { decorators: resourceDecorators },
+			operations: { list: { decorators: operationDecorators } },
+			softDelete: {
+				field: "deletedAt",
+				allowQueryDeleted: true,
+				queryDeletedEnhancers: { decorators: deletedDecorators },
+			},
+		});
+
+		resourceDecorators.push(noopDecorator);
+		operationDecorators.push(noopDecorator);
+		deletedDecorators.push(noopDecorator);
+
+		expect(resource.enhancers?.decorators).toHaveLength(1);
+		expect(resource.operations.list?.decorators).toHaveLength(1);
+		expect(resource.softDelete?.queryDeletedEnhancers?.decorators).toHaveLength(1);
+		expect(Object.isFrozen(resource.enhancers?.decorators)).toBe(true);
+		expect(Object.isFrozen(resource.operations.list?.decorators)).toBe(true);
+		expect(Object.isFrozen(resource.softDelete?.queryDeletedEnhancers?.decorators)).toBe(true);
+	});
+
 	it("snapshots binding fields and provider metadata", () => {
 		const resource = defineCrudResource(validDefinition());
 		const fields: string[] = ["id", "name"];

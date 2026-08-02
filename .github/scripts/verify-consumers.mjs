@@ -35,7 +35,7 @@ try {
 		manifests.set(definition.name, manifest);
 
 		report(`\nPacking ${definition.name}...`);
-		await run("pnpm", ["--dir", packageDirectory, "pack", "--pack-destination", packsDirectory]);
+		await runPnpm(["--dir", packageDirectory, "pack", "--pack-destination", packsDirectory]);
 		const tarball = join(packsDirectory, packedFilename(manifest.name, manifest.version));
 		await access(tarball);
 		tarballs.set(definition.name, tarball);
@@ -99,12 +99,11 @@ async function verifyConsumer({ definition, manifests, rootManifest, tarballs })
 		join(consumerDirectory, "consumer.ts"),
 	);
 
-	await run(
-		"pnpm",
+	await runPnpm(
 		["install", "--strict-peer-dependencies", "--ignore-scripts", "--no-frozen-lockfile"],
 		{ cwd: consumerDirectory },
 	);
-	await run("pnpm", ["exec", "tsc", "--project", "tsconfig.json"], {
+	await runPnpm(["exec", "tsc", "--project", "tsconfig.json"], {
 		cwd: consumerDirectory,
 	});
 	await run(process.execPath, ["dist/consumer.js"], { cwd: consumerDirectory });
@@ -201,6 +200,10 @@ function report(message) {
 
 function reportError(message) {
 	process.stderr.write(`${message}\n`);
+}
+
+async function runPnpm(arguments_, options = {}) {
+	await run("corepack", ["pnpm", ...arguments_], options);
 }
 
 async function run(command, arguments_, options = {}) {

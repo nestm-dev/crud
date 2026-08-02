@@ -46,7 +46,13 @@ export interface CrudMutationEvent<Resource extends AnyCrudResource = AnyCrudRes
 
 export interface CrudScopeResult {
 	readonly predicate?: CrudPredicate;
+	/** Logical persistence values applied only while creating a record. */
 	readonly createValues?: CrudValues;
+	/**
+	 * Logical persistence values applied only to an explicit update operation.
+	 * Unlike `createValues`, these values may overwrite API-mapped update fields.
+	 */
+	readonly updateValues?: CrudValues;
 }
 
 export interface CrudScope<Resource extends AnyCrudResource = AnyCrudResource> {

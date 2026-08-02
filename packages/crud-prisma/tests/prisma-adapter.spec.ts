@@ -56,4 +56,27 @@ describe("PrismaCrudAdapter", () => {
 			message: "A record with the same unique values already exists.",
 		} satisfies Partial<CrudAdapterError>);
 	});
+
+	it("preserves a structurally equivalent adapter error from another package copy", async () => {
+		const duplicatedError = {
+			name: "CrudAdapterError",
+			code: "unsupported" as const,
+			message: "duplicate package error",
+			retryable: false,
+		};
+		const client = {
+			user: { create: vi.fn(async () => Promise.reject(duplicatedError)) },
+			$transaction: vi.fn(),
+		};
+		const adapter = createPrismaCrudAdapter<User, typeof client, typeof client.user>({
+			client,
+			delegate: (owner) => owner.user,
+			identity: (record) => ({ id: record.id }),
+		});
+
+		const failure = await adapter
+			.create({ values: {} }, context("create"))
+			.catch((error: unknown) => error);
+		expect(failure).toBe(duplicatedError);
+	});
 });
