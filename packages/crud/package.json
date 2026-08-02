@@ -1,0 +1,82 @@
+{
+	"name": "@nestm/crud",
+	"version": "0.1.0-alpha.0",
+	"description": "Type-safe generated CRUD controllers for NestJS 12.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/crud.git",
+		"directory": "packages/crud"
+	},
+	"homepage": "https://github.com/nestm-dev/crud/tree/main/packages/crud#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/crud/issues"
+	},
+	"keywords": [
+		"nestjs",
+		"nestjs-12",
+		"crud",
+		"rest",
+		"openapi",
+		"standard-schema",
+		"orm",
+		"esm",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./adapter": {
+			"types": "./dist/adapter/index.d.mts",
+			"import": "./dist/adapter/index.mjs",
+			"default": "./dist/adapter/index.mjs"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.mts",
+			"import": "./dist/testing/index.mjs",
+			"default": "./dist/testing/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"@standard-schema/spec": "1.1.0"
+	},
+	"peerDependencies": {
+		"@nestjs/common": "^12.0.0-alpha.5",
+		"@nestjs/core": "^12.0.0-alpha.5",
+		"@nestjs/swagger": "^12.0.0-alpha.2",
+		"@nestm/standard-schema": ">=0.1.0-alpha.1 <0.2.0",
+		"reflect-metadata": "^0.2.2",
+		"rxjs": "^7.8.0"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

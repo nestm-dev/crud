@@ -1,0 +1,37 @@
+{
+	"compilerOptions": {
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"target": "es2023",
+		"lib": ["es2023"],
+		"types": ["node", "vitest/globals"],
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"exactOptionalPropertyTypes": true,
+		"noImplicitOverride": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"forceConsistentCasingInFileNames": true,
+		"verbatimModuleSyntax": false,
+		"isolatedModules": true,
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": true,
+		"rewriteRelativeImportExtensions": true,
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"removeComments": false,
+		"paths": {
+			"@nestm/crud": ["./packages/crud/src/index.ts"],
+			"@nestm/crud/adapter": ["./packages/crud/src/adapter/index.ts"],
+			"@nestm/crud/testing": ["./packages/crud/src/testing/index.ts"],
+			"@nestm/crud-memory": ["./packages/crud-memory/src/index.ts"],
+			"@nestm/crud-typeorm": ["./packages/crud-typeorm/src/index.ts"],
+			"@nestm/crud-drizzle": ["./packages/crud-drizzle/src/index.ts"],
+			"@nestm/crud-prisma": ["./packages/crud-prisma/src/index.ts"]
+		}
+	}
+}

@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency: release-${{ github.ref }}
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm run test
+        env: { PG_SKIP: "1" }
+
+  release:
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: release
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: nestm_crud
+          POSTGRES_USER: nestm
+          POSTGRES_PASSWORD: nestm
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nestm -d nestm_crud"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+          --health-start-period 5s
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run verify
+        env:
+          PG_URL: postgres://nestm:nestm@localhost:5432/nestm_crud
+      - name: Create release PR or publish
+        uses: changesets/action@v1
+        with:
+          publish: pnpm run release
+          version: pnpm changeset version
+          title: "chore: release @nestm/crud"
+          commit: "chore: release @nestm/crud"
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reconcile package tags
+        if: always()
+        run: |
+          for MANIFEST in packages/*/package.json; do
+            NAME=$(node -p "require('./$MANIFEST').name")
+            VERSION=$(node -p "require('./$MANIFEST').version")
+            TAG="$NAME@$VERSION"
+            if npm view "$NAME@$VERSION" version > /dev/null 2>&1; then
+              git tag "$TAG" 2> /dev/null && git push origin "$TAG" || true
+            fi
+          done

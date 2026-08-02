@@ -1,0 +1,21 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "./generated"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model CrudPgPrismaItem {
+  tenantId  String   @map("tenant_id")
+  id        String
+  name      String   @unique(map: "crud_pg_prisma_items_name_key")
+  score     Int
+  category  String?
+  createdAt DateTime @map("created_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id], map: "crud_pg_prisma_items_pkey")
+  @@map("crud_pg_prisma_items")
+}

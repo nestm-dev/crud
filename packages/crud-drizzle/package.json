@@ -1,0 +1,66 @@
+{
+	"name": "@nestm/crud-drizzle",
+	"version": "0.1.0-alpha.0",
+	"description": "PostgreSQL Drizzle ORM adapter for @nestm/crud.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/crud.git",
+		"directory": "packages/crud-drizzle"
+	},
+	"homepage": "https://github.com/nestm-dev/crud/tree/main/packages/crud-drizzle#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/crud/issues"
+	},
+	"keywords": [
+		"nestjs",
+		"crud",
+		"drizzle",
+		"postgresql",
+		"adapter",
+		"esm",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"@nestm/crud": "workspace:^"
+	},
+	"peerDependencies": {
+		"@nestjs/common": "^12.0.0-alpha.5",
+		"drizzle-orm": ">=0.45.0 <0.46.0"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

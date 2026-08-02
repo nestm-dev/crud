@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      nestjs:
+        patterns: ["@nestjs/*"]
+      orm-adapters:
+        patterns: ["typeorm", "drizzle-orm", "prisma", "@prisma/client"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

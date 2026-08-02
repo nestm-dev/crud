@@ -1,0 +1,11 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"declaration": false,
+		"declarationMap": false,
+		"emitDecoratorMetadata": false,
+		"noEmit": true,
+		"sourceMap": false
+	},
+	"include": ["./**/*.ts", "../../vitest.postgres.config.ts"]
+}

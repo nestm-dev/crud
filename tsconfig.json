@@ -1,0 +1,10 @@
+{
+	"files": [],
+	"references": [
+		{ "path": "./packages/crud" },
+		{ "path": "./packages/crud-memory" },
+		{ "path": "./packages/crud-typeorm" },
+		{ "path": "./packages/crud-drizzle" },
+		{ "path": "./packages/crud-prisma" }
+	]
+}
