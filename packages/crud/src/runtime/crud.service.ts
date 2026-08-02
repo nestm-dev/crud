@@ -8,9 +8,9 @@ import {
 	type ExecutionContext,
 } from "@nestjs/common";
 
-import { CrudAdapterError } from "../adapter/adapter.error.ts";
+import { isCrudAdapterError } from "../adapter/adapter.error.ts";
 import type { CrudAdapter, CrudAdapterContext } from "../adapter/adapter.types.ts";
-import type { CrudResourceBinding } from "../adapter/binding.types.ts";
+import type { CrudResourceBinding, CrudScopeCreateField } from "../adapter/binding.types.ts";
 import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
 import type { ResolvedCrudModuleOptions } from "../module/crud-module.options.ts";
 import { andCrudPredicates, orCrudPredicates } from "../query/predicate.ts";
@@ -57,6 +57,7 @@ export class CrudService<
 	RecordType = unknown,
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	ScopeCreateField extends CrudScopeCreateField<CreateValues, UpdateValues> = never,
 > {
 	readonly resource: Resource;
 
@@ -67,7 +68,8 @@ export class CrudService<
 			RecordType,
 			readonly string[],
 			CreateValues,
-			UpdateValues
+			UpdateValues,
+			ScopeCreateField
 		>,
 		readonly adapter: CrudAdapter<RecordType, CreateValues, UpdateValues>,
 		readonly hooks: readonly CrudLifecycleHook<Resource>[],
@@ -97,11 +99,15 @@ export class CrudService<
 						}
 					}
 					const mapped = await this.binding.mappings.create(value);
-					const scoped = await this.binding.mappings.persistence(scope.createValues ?? {});
-					const record = await this.adapter.create(
-						{ values: { ...mapped, ...scoped } },
-						this.adapterContext(context),
-					);
+					const scoped =
+						this.binding.mappings.scopeCreate === undefined
+							? await this.binding.mappings.persistence(scope.createValues ?? {})
+							: await this.binding.mappings.scopeCreate(scope.createValues ?? {});
+					this.assertScopeCreateFields(scoped);
+					// The runtime assertion above establishes the generic Pick that TypeScript cannot
+					// normalize back into an arbitrary adapter-defined CreateValues subtype.
+					const values = { ...mapped, ...scoped } as CreateValues;
+					const record = await this.adapter.create({ values }, this.adapterContext(context));
 					for (const hook of this.hooks) {
 						await hook.afterCreate?.(record, context);
 					}
@@ -226,7 +232,7 @@ export class CrudService<
 						if (hook.beforeUpdate !== undefined) value = await hook.beforeUpdate(value, context);
 					}
 					const mapped = await this.binding.mappings.update(value);
-					const scoped = await this.binding.mappings.persistence(scope.createValues ?? {});
+					const scoped = await this.binding.mappings.persistence(scope.updateValues ?? {});
 					const record = await this.adapter.update(
 						{ predicate, values: { ...mapped, ...scoped } },
 						this.adapterContext(context),
@@ -555,12 +561,15 @@ export class CrudService<
 		const resolved = await Promise.all(this.scopes.map(async (scope) => scope.resolve(context)));
 		const predicate = andCrudPredicates(...resolved.map((result) => result.predicate));
 		const createValues: Record<string, unknown> = {};
+		const updateValues: Record<string, unknown> = {};
 		for (const result of resolved) {
 			if (result.createValues !== undefined) Object.assign(createValues, result.createValues);
+			if (result.updateValues !== undefined) Object.assign(updateValues, result.updateValues);
 		}
 		return {
 			...(predicate === undefined ? {} : { predicate }),
 			createValues,
+			updateValues,
 		};
 	}
 
@@ -620,7 +629,7 @@ export class CrudService<
 			return await work();
 		} catch (error) {
 			if (error instanceof HttpException) throw error;
-			if (error instanceof CrudAdapterError) {
+			if (isCrudAdapterError(error)) {
 				if (error.code === "conflict") throw new ConflictException("Resource conflict.");
 				if (error.code === "constraint") throw new BadRequestException("Constraint violation.");
 			}
@@ -630,6 +639,18 @@ export class CrudService<
 
 	private notFound(): NotFoundException {
 		return new NotFoundException(`${this.resource.name} was not found.`);
+	}
+
+	private assertScopeCreateFields(
+		scoped: UpdateValues | Partial<Pick<CreateValues, ScopeCreateField>>,
+	): asserts scoped is Pick<CreateValues, ScopeCreateField> {
+		for (const field of this.binding.scopeCreateFields ?? []) {
+			if (!Object.hasOwn(scoped, field)) {
+				throw new TypeError(
+					`CRUD scope for "${this.resource.name}" did not supply configured create field "${field}".`,
+				);
+			}
+		}
 	}
 
 	private assertCapabilities(): void {

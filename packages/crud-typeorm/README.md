@@ -8,7 +8,7 @@ identities, and sanitizes database errors.
 The `0.1` alpha is certified for PostgreSQL only.
 
 ```sh
-pnpm add @nestm/crud @nestm/crud-typeorm typeorm pg
+pnpm add @nestm/crud@alpha @nestm/crud-typeorm@alpha typeorm pg
 ```
 
 ```ts

@@ -52,6 +52,15 @@ function consumerSchema<Input, Output>(): ConsumerSchema<Input, Output> {
 	};
 }
 
+const consumerResourceDecorator: ClassDecorator = (target) => {
+	Reflect.defineMetadata("consumer:resource-decorator", true, target);
+};
+const consumerOperationDecorator: MethodDecorator = (_target, _propertyKey, descriptor) => {
+	const handler: unknown = descriptor.value;
+	if (typeof handler !== "function") throw new TypeError("Expected a generated CRUD handler.");
+	Reflect.defineMetadata("consumer:operation-decorator", true, handler);
+};
+
 const resource = defineCrudResource({
 	name: "consumer-items",
 	path: "/api/consumer-items/",
@@ -63,7 +72,14 @@ const resource = defineCrudResource({
 		update: consumerSchema<UpdateItem, UpdateItem>(),
 		response: consumerSchema<Item, Item>(),
 	},
-	operations: crudOperations.all(),
+	operations: crudOperations.all({
+		read: {
+			decorators: [consumerOperationDecorator],
+		},
+	}),
+	enhancers: {
+		decorators: [consumerResourceDecorator],
+	},
 	query: {
 		sort: { fields: ["id"], default: ["id"] },
 		pagination: { offset: true },
@@ -104,6 +120,8 @@ assert.equal(Reflect.getMetadata(PATH_METADATA, controller.prototype.read), ":id
 assert.equal(Reflect.getMetadata(METHOD_METADATA, controller.prototype.read), RequestMethod.GET);
 assert.equal(Reflect.getMetadata(HTTP_CODE_METADATA, controller.prototype.read), HttpStatus.OK);
 assert.equal(Reflect.getMetadata(VERSION_METADATA, controller.prototype.read), "1");
+assert.equal(Reflect.getMetadata("consumer:resource-decorator", controller), true);
+assert.equal(Reflect.getMetadata("consumer:operation-decorator", controller.prototype.read), true);
 assert.deepEqual(Reflect.getMetadata(PARAMTYPES_METADATA, controller.prototype, "read"), [
 	Object,
 	Object,

@@ -1,4 +1,4 @@
-import { CrudAdapterError } from "../adapter/adapter.error.ts";
+import { CrudAdapterError, isCrudAdapterError } from "../adapter/adapter.error.ts";
 import type {
 	CrudAdapter,
 	CrudAdapterContext,
@@ -331,7 +331,7 @@ function assertSame(actual: unknown, expected: unknown, message: string): void {
 }
 
 function assertAdapterSessionError(error: unknown, source: string): void {
-	assert(error instanceof CrudAdapterError, `${source} did not reject with CrudAdapterError.`);
+	assert(isCrudAdapterError(error), `${source} did not reject with CrudAdapterError.`);
 	assert(error.code === "unknown", `${source} rejected with code '${error.code}'.`);
 }
 

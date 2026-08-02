@@ -9,10 +9,14 @@ import {
 } from "@nestm/crud/adapter";
 import { createCrudAdapterConformanceCases } from "@nestm/crud/testing";
 import { MemoryCrudAdapter } from "@nestm/crud-memory";
-import { createDrizzleCrudAdapter } from "@nestm/crud-drizzle";
+import {
+	createDrizzleCrudAdapter,
+	type DrizzleCrudTransactionRunnerContext,
+} from "@nestm/crud-drizzle";
 import { createPrismaCrudAdapter } from "@nestm/crud-prisma";
 import { createTypeOrmCrudAdapter } from "@nestm/crud-typeorm";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { integer, pgTable, primaryKey, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { Pool } from "pg";
@@ -50,6 +54,12 @@ const tableNames = [
 const skipPostgres = process.env.PG_SKIP === "1";
 const harnesses = new Map<AdapterName, AdapterHarness>();
 let adminPool: Pool | undefined;
+let createSecuredDrizzleAdapter:
+	| ((
+			runnerContexts: DrizzleCrudTransactionRunnerContext[],
+			rowContexts: CrudAdapterContext[],
+	  ) => CrudAdapter<ItemRecord>)
+	| undefined;
 
 const typeOrmItemSchema = new EntitySchema<ItemRecord>({
 	name: "CrudPgTypeOrmItem",
@@ -270,6 +280,40 @@ async function initializeHarnesses(pgUrl: string): Promise<void> {
 			createdAt: drizzleItems.createdAt,
 		},
 	});
+	createSecuredDrizzleAdapter = (runnerContexts, rowContexts) =>
+		createDrizzleCrudAdapter({
+			database: drizzleDatabase,
+			table: drizzleItems,
+			columns: {
+				tenantId: drizzleItems.tenantId,
+				id: drizzleItems.id,
+				name: drizzleItems.name,
+				score: drizzleItems.score,
+				category: drizzleItems.category,
+				createdAt: drizzleItems.createdAt,
+			},
+			transactionRunner: {
+				run: (runnerContext, workWithTransaction) => {
+					runnerContexts.push(runnerContext);
+					return drizzleDatabase.transaction(
+						(transaction) =>
+							workWithTransaction(transaction, {
+								accessMode: runnerContext.accessMode,
+								isolationLevel: runnerContext.isolationLevel,
+								ownsCommit: true,
+							}),
+						{
+							accessMode: runnerContext.accessMode,
+							isolationLevel: runnerContext.isolationLevel,
+						},
+					);
+				},
+			},
+			rowPredicate: ({ table, context: rowContext }) => {
+				rowContexts.push(rowContext);
+				return eq(table.tenantId, "drizzle-secured");
+			},
+		});
 	harnesses.set("drizzle", {
 		adapter: drizzleAdapter,
 		close: () => drizzlePool.end(),
@@ -477,6 +521,7 @@ describe.skipIf(skipPostgres)("PostgreSQL adapter conformance", () => {
 	afterAll(async () => {
 		await Promise.all([...harnesses.values()].map((entry) => entry.close()));
 		harnesses.clear();
+		createSecuredDrizzleAdapter = undefined;
 		if (adminPool !== undefined) {
 			await adminPool.query(`DROP TABLE IF EXISTS ${tableNames.join(", ")}`);
 			await adminPool.end();
@@ -879,4 +924,54 @@ describe.skipIf(skipPostgres)("PostgreSQL adapter conformance", () => {
 			});
 		});
 	}
+
+	it("runs Drizzle row policy and counted totals in application-owned transactions", async () => {
+		if (createSecuredDrizzleAdapter === undefined) {
+			throw new Error("The secured Drizzle adapter factory was not initialized.");
+		}
+		await seed(harness("drizzle").adapter, [
+			record({
+				tenantId: "drizzle-secured",
+				id: "visible",
+				name: "drizzle-secured-visible",
+				score: 1,
+			}),
+			record({
+				tenantId: "drizzle-hidden",
+				id: "hidden",
+				name: "drizzle-secured-hidden",
+				score: 2,
+			}),
+		]);
+		const runnerContexts: DrizzleCrudTransactionRunnerContext[] = [];
+		const rowContexts: CrudAdapterContext[] = [];
+		const adapter = createSecuredDrizzleAdapter(runnerContexts, rowContexts);
+
+		await expect(
+			adapter.findMany({ order: [], limit: 10, count: true }, context("list")),
+		).resolves.toMatchObject({
+			records: [{ tenantId: "drizzle-secured", id: "visible" }],
+			total: 1,
+		});
+		await expect(
+			adapter.update(
+				{ predicate: identity("drizzle-hidden", "hidden"), values: { score: 99 } },
+				context("update"),
+			),
+		).resolves.toBeNull();
+		await expect(
+			adapter.delete({ predicate: identity("drizzle-hidden", "hidden") }, context("delete")),
+		).resolves.toBeNull();
+
+		expect(runnerContexts).toHaveLength(3);
+		expect(runnerContexts[0]).toMatchObject({
+			accessMode: "read only",
+			isolationLevel: "repeatable read",
+			mustOwnCommit: false,
+		});
+		expect(runnerContexts[1]).toMatchObject({ mustOwnCommit: true });
+		expect(runnerContexts[2]).toMatchObject({ mustOwnCommit: true });
+		expect(rowContexts).toHaveLength(3);
+		expect(rowContexts.every(({ session }) => session !== undefined)).toBe(true);
+	});
 });

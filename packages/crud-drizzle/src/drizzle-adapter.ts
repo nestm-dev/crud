@@ -1,4 +1,4 @@
-import { CrudAdapterError } from "@nestm/crud/adapter";
+import { CrudAdapterError, isCrudAdapterError } from "@nestm/crud/adapter";
 import type {
 	CrudAdapter,
 	CrudAdapterContext,
@@ -8,12 +8,15 @@ import type {
 	CrudFindManyInput,
 	CrudFindManyResult,
 	CrudFindOneInput,
+	CrudPredicate,
 	CrudUpdateInput,
 } from "@nestm/crud/adapter";
 import {
+	and,
 	asc,
 	desc,
 	getTableColumns,
+	sql,
 	type InferInsertModel,
 	type InferSelectModel,
 	type SQL,
@@ -25,6 +28,66 @@ import { compileDrizzlePredicate, type DrizzleCrudColumns } from "./drizzle-pred
 
 export type DrizzleCrudCreateValues<Table extends AnyPgTable> = InferInsertModel<Table>;
 export type DrizzleCrudUpdateValues<Table extends AnyPgTable> = Partial<InferInsertModel<Table>>;
+
+export type DrizzleCrudDatabase<
+	QueryResult extends PgQueryResultHKT,
+	FullSchema extends Record<string, unknown>,
+	Schema extends TablesRelationalConfig,
+> = PgDatabase<QueryResult, FullSchema, Schema>;
+
+export type DrizzleCrudTransactionAccessMode = "read only" | "read write";
+export type DrizzleCrudTransactionIsolationLevel = "read committed" | "repeatable read";
+
+export interface DrizzleCrudTransactionRequirements {
+	readonly accessMode: DrizzleCrudTransactionAccessMode;
+	readonly isolationLevel: DrizzleCrudTransactionIsolationLevel;
+	/** Mutations require the runner to own the real commit, never only a savepoint. */
+	readonly mustOwnCommit: boolean;
+}
+
+export interface DrizzleCrudTransactionRunnerContext
+	extends CrudAdapterContext, DrizzleCrudTransactionRequirements {}
+
+/** Effective transaction state reported by a runner when it strengthens a request. */
+export interface DrizzleCrudEffectiveTransaction {
+	readonly accessMode: DrizzleCrudTransactionAccessMode;
+	readonly isolationLevel: DrizzleCrudTransactionIsolationLevel;
+	/** Whether the runner controls the commit that makes this work durable. */
+	readonly ownsCommit: boolean;
+}
+
+export interface DrizzleCrudTransactionRunner<
+	QueryResult extends PgQueryResultHKT,
+	FullSchema extends Record<string, unknown>,
+	Schema extends TablesRelationalConfig,
+> {
+	run<Result>(
+		context: DrizzleCrudTransactionRunnerContext,
+		workWithTransaction: (
+			database: DrizzleCrudDatabase<QueryResult, FullSchema, Schema>,
+			/**
+			 * Required when the runner uses stronger settings than requested or does not
+			 * own the real commit. Omission preserves the legacy exact-request contract.
+			 */
+			effectiveTransaction?: DrizzleCrudEffectiveTransaction,
+		) => Promise<Result>,
+	): Promise<Result>;
+}
+
+export interface DrizzleCrudRowPredicateContext<Table extends AnyPgTable> {
+	readonly table: Table;
+	readonly context: CrudAdapterContext;
+}
+
+export type DrizzleCrudRowPredicate<Table extends AnyPgTable> = (
+	context: DrizzleCrudRowPredicateContext<Table>,
+) => SQL | Promise<SQL>;
+
+export interface DrizzleCrudRowPredicateOptions<Table extends AnyPgTable> {
+	readonly resolve: DrizzleCrudRowPredicate<Table>;
+	/** Minimum transaction settings needed while resolving and applying this predicate. */
+	readonly transaction?: Pick<DrizzleCrudTransactionRequirements, "isolationLevel">;
+}
 
 export interface DrizzleCrudAdapterOptions<
 	Table extends AnyPgTable,
@@ -39,6 +102,10 @@ export interface DrizzleCrudAdapterOptions<
 	readonly columns: DrizzleCrudColumns;
 	/** Maps logical fields to keys in returned row objects; defaults to the logical field. */
 	readonly recordKeys?: Readonly<Record<string, string>>;
+	/** Wraps standalone work in an application-owned transaction, for example a tenant RLS executor. */
+	readonly transactionRunner?: DrizzleCrudTransactionRunner<QueryResult, FullSchema, Schema>;
+	/** Adds a native, fail-closed SQL predicate to every read, update, and delete statement. */
+	readonly rowPredicate?: DrizzleCrudRowPredicate<Table> | DrizzleCrudRowPredicateOptions<Table>;
 }
 
 interface PostgreSqlError {
@@ -60,7 +127,15 @@ function postgresCode(error: unknown): string | undefined {
 }
 
 function databaseError(error: unknown): CrudAdapterError {
+	if (isCrudAdapterError(error)) return error;
 	const code = postgresCode(error);
+	if (code === "40001" || code === "40P01") {
+		return new CrudAdapterError(
+			"conflict",
+			"The transaction conflicted with concurrent database work.",
+			{ cause: error, retryable: true },
+		);
+	}
 	if (code === "23505") {
 		return new CrudAdapterError(
 			"conflict",
@@ -111,6 +186,73 @@ interface DrizzleDatabaseExecutor<Row, CreateValues extends object, UpdateValues
 	$count(table: object, predicate?: SQL): PromiseLike<number>;
 }
 
+interface DrizzleSessionState<Row, CreateValues extends object, UpdateValues extends object> {
+	readonly executor: DrizzleDatabaseExecutor<Row, CreateValues, UpdateValues>;
+	readonly transaction: DrizzleCrudEffectiveTransaction;
+}
+
+function transactionRequirements(
+	context: CrudAdapterContext,
+	rowPredicateIsolationLevel?: DrizzleCrudTransactionIsolationLevel,
+): DrizzleCrudTransactionRequirements {
+	const readOnly = context.operation === "list" || context.operation === "read";
+	const operationIsolationLevel =
+		context.operation === "list" ? "repeatable read" : "read committed";
+	return {
+		accessMode: readOnly ? "read only" : "read write",
+		isolationLevel:
+			operationIsolationLevel === "repeatable read" ||
+			rowPredicateIsolationLevel === "repeatable read"
+				? "repeatable read"
+				: "read committed",
+		mustOwnCommit: !readOnly,
+	};
+}
+
+function resolveEffectiveTransaction(
+	requirements: DrizzleCrudTransactionRequirements,
+	reported: DrizzleCrudEffectiveTransaction | undefined,
+): DrizzleCrudEffectiveTransaction {
+	const effective = reported ?? {
+		accessMode: requirements.accessMode,
+		isolationLevel: requirements.isolationLevel,
+		ownsCommit: true,
+	};
+	if (
+		(effective.accessMode !== "read only" && effective.accessMode !== "read write") ||
+		(effective.isolationLevel !== "read committed" &&
+			effective.isolationLevel !== "repeatable read") ||
+		typeof effective.ownsCommit !== "boolean"
+	) {
+		throw new CrudAdapterError(
+			"unknown",
+			"The Drizzle transaction runner reported invalid effective transaction state.",
+		);
+	}
+	if (effective.accessMode !== requirements.accessMode) {
+		throw new CrudAdapterError(
+			"unsupported",
+			"The Drizzle transaction runner did not honor the requested access mode.",
+		);
+	}
+	if (
+		requirements.isolationLevel === "repeatable read" &&
+		effective.isolationLevel !== "repeatable read"
+	) {
+		throw new CrudAdapterError(
+			"unsupported",
+			"The Drizzle transaction runner did not honor the required isolation level.",
+		);
+	}
+	if (requirements.mustOwnCommit && !effective.ownsCommit) {
+		throw new CrudAdapterError(
+			"unsupported",
+			"A Drizzle CRUD mutation requires a runner that owns the real commit.",
+		);
+	}
+	return Object.freeze({ ...effective });
+}
+
 export class DrizzleCrudAdapter<
 	Table extends AnyPgTable,
 	QueryResult extends PgQueryResultHKT,
@@ -132,14 +274,33 @@ export class DrizzleCrudAdapter<
 	readonly #table: Table;
 	readonly #columns: DrizzleCrudColumns;
 	readonly #recordKeys: Readonly<Record<string, string>>;
+	readonly #transactionRunner:
+		DrizzleCrudTransactionRunner<QueryResult, FullSchema, Schema> | undefined;
+	readonly #rowPredicate: DrizzleCrudRowPredicate<Table> | undefined;
+	readonly #rowPredicateIsolationLevel: DrizzleCrudTransactionIsolationLevel | undefined;
 	readonly #sessionMarker = Symbol("@nestm/crud-drizzle:session");
-	readonly #activeSessions = new WeakSet<object>();
+	readonly #activeSessions = new WeakSet<
+		DrizzleSessionState<
+			InferSelectModel<Table>,
+			DrizzleCrudCreateValues<Table>,
+			DrizzleCrudUpdateValues<Table>
+		>
+	>();
 
 	constructor(options: DrizzleCrudAdapterOptions<Table, QueryResult, FullSchema, Schema>) {
 		this.#database = options.database;
 		this.#table = options.table;
 		this.#columns = Object.freeze({ ...options.columns });
 		this.#recordKeys = Object.freeze({ ...options.recordKeys });
+		this.#transactionRunner = options.transactionRunner;
+		this.#rowPredicate =
+			typeof options.rowPredicate === "function"
+				? options.rowPredicate
+				: options.rowPredicate?.resolve;
+		this.#rowPredicateIsolationLevel =
+			typeof options.rowPredicate === "function"
+				? undefined
+				: options.rowPredicate?.transaction?.isolationLevel;
 	}
 
 	async transaction<Result>(
@@ -150,21 +311,14 @@ export class DrizzleCrudAdapter<
 			this.#executorFrom(context.session);
 			return work(context.session);
 		}
-
-		let activeTransaction: object | undefined;
-		try {
-			return await this.#database.transaction(async (transaction) => {
-				activeTransaction = transaction;
-				this.#activeSessions.add(transaction);
-				return work({ adapter: this.#sessionMarker, value: transaction });
-			});
-		} catch (error) {
-			if (error instanceof CrudAdapterError) throw error;
-			if (postgresCode(error) !== undefined) throw databaseError(error);
-			throw error;
-		} finally {
-			if (activeTransaction !== undefined) this.#activeSessions.delete(activeTransaction);
-		}
+		return this.#runTransaction(
+			work,
+			context,
+			transactionRequirements(
+				context,
+				context.operation === "create" ? undefined : this.#rowPredicateIsolationLevel,
+			),
+		);
 	}
 
 	async create(
@@ -172,13 +326,21 @@ export class DrizzleCrudAdapter<
 		context: CrudAdapterContext,
 	): Promise<InferSelectModel<Table>> {
 		try {
-			const rows = await this.#databaseFor(context)
-				.insert(this.#table)
-				.values(input.values)
-				.returning();
-			const record = rows[0];
-			if (record === undefined) throw new Error("INSERT did not return a row.");
-			return record;
+			return await this.#withExecutor(
+				context,
+				{
+					accessMode: "read write",
+					isolationLevel: "read committed",
+					mustOwnCommit: true,
+				},
+				false,
+				async (database) => {
+					const rows = await database.insert(this.#table).values(input.values).returning();
+					const record = rows[0];
+					if (record === undefined) throw new Error("INSERT did not return a row.");
+					return record;
+				},
+			);
 		} catch (error) {
 			throw databaseError(error);
 		}
@@ -189,16 +351,27 @@ export class DrizzleCrudAdapter<
 		context: CrudAdapterContext,
 	): Promise<InferSelectModel<Table> | null> {
 		try {
-			const database = this.#databaseFor(context);
-			let query = database
-				.select(getTableColumns(this.#table) as Readonly<Record<string, unknown>>)
-				.from(this.#table)
-				.where(compileDrizzlePredicate(input.predicate, this.#columns))
-				.$dynamic();
-			const order = this.#order(input.order ?? []);
-			if (order.length > 0) query = query.orderBy(...order);
-			const rows = await query.limit(1);
-			return rows[0] ?? null;
+			return await this.#withExecutor(
+				context,
+				{
+					accessMode: "read only",
+					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					mustOwnCommit: false,
+				},
+				this.#rowPredicate !== undefined,
+				async (database, activeContext) => {
+					const predicate = await this.#composeRequiredPredicate(input.predicate, activeContext);
+					let query = database
+						.select(getTableColumns(this.#table) as Readonly<Record<string, unknown>>)
+						.from(this.#table)
+						.where(predicate)
+						.$dynamic();
+					const order = this.#order(input.order ?? []);
+					if (order.length > 0) query = query.orderBy(...order);
+					const rows = await query.limit(1);
+					return rows[0] ?? null;
+				},
+			);
 		} catch (error) {
 			throw databaseError(error);
 		}
@@ -209,23 +382,34 @@ export class DrizzleCrudAdapter<
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<InferSelectModel<Table>>> {
 		try {
-			const database = this.#databaseFor(context);
-			const predicate = input.predicate
-				? compileDrizzlePredicate(input.predicate, this.#columns)
-				: undefined;
-			let query = database
-				.select(getTableColumns(this.#table) as Readonly<Record<string, unknown>>)
-				.from(this.#table)
-				.$dynamic();
-			if (predicate) query = query.where(predicate);
-			const order = this.#order(input.order);
-			if (order.length > 0) query = query.orderBy(...order);
-			query = query.limit(input.limit);
-			if (input.offset !== undefined) query = query.offset(input.offset);
-			const records = await query;
-			if (!input.count) return { records };
-			const total = await database.$count(this.#table, predicate);
-			return { records, total };
+			return await this.#withExecutor(
+				context,
+				{
+					accessMode: "read only",
+					isolationLevel:
+						input.count || this.#rowPredicateIsolationLevel === "repeatable read"
+							? "repeatable read"
+							: "read committed",
+					mustOwnCommit: false,
+				},
+				input.count || this.#rowPredicate !== undefined,
+				async (database, activeContext) => {
+					const predicate = await this.#composePredicate(input.predicate, activeContext);
+					let query = database
+						.select(getTableColumns(this.#table) as Readonly<Record<string, unknown>>)
+						.from(this.#table)
+						.$dynamic();
+					if (predicate !== undefined) query = query.where(predicate);
+					const order = this.#order(input.order);
+					if (order.length > 0) query = query.orderBy(...order);
+					query = query.limit(input.limit);
+					if (input.offset !== undefined) query = query.offset(input.offset);
+					const records = await query;
+					if (!input.count) return { records };
+					const total = await database.$count(this.#table, predicate);
+					return { records, total };
+				},
+			);
 		} catch (error) {
 			throw databaseError(error);
 		}
@@ -236,12 +420,24 @@ export class DrizzleCrudAdapter<
 		context: CrudAdapterContext,
 	): Promise<InferSelectModel<Table> | null> {
 		try {
-			const rows = await this.#databaseFor(context)
-				.update(this.#table)
-				.set(input.values)
-				.where(compileDrizzlePredicate(input.predicate, this.#columns))
-				.returning();
-			return rows[0] ?? null;
+			return await this.#withExecutor(
+				context,
+				{
+					accessMode: "read write",
+					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					mustOwnCommit: true,
+				},
+				this.#rowPredicate !== undefined,
+				async (database, activeContext) => {
+					const predicate = await this.#composeRequiredPredicate(input.predicate, activeContext);
+					const rows = await database
+						.update(this.#table)
+						.set(input.values)
+						.where(predicate)
+						.returning();
+					return rows[0] ?? null;
+				},
+			);
 		} catch (error) {
 			throw databaseError(error);
 		}
@@ -252,11 +448,20 @@ export class DrizzleCrudAdapter<
 		context: CrudAdapterContext,
 	): Promise<InferSelectModel<Table> | null> {
 		try {
-			const rows = await this.#databaseFor(context)
-				.delete(this.#table)
-				.where(compileDrizzlePredicate(input.predicate, this.#columns))
-				.returning();
-			return rows[0] ?? null;
+			return await this.#withExecutor(
+				context,
+				{
+					accessMode: "read write",
+					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					mustOwnCommit: true,
+				},
+				this.#rowPredicate !== undefined,
+				async (database, activeContext) => {
+					const predicate = await this.#composeRequiredPredicate(input.predicate, activeContext);
+					const rows = await database.delete(this.#table).where(predicate).returning();
+					return rows[0] ?? null;
+				},
+			);
 		} catch (error) {
 			throw databaseError(error);
 		}
@@ -267,21 +472,158 @@ export class DrizzleCrudAdapter<
 		return (record as Readonly<Record<string, unknown>>)[key];
 	}
 
-	#databaseFor(
+	async #withExecutor<Result>(
 		context: CrudAdapterContext,
-	): DrizzleDatabaseExecutor<
+		requirements: DrizzleCrudTransactionRequirements,
+		forceTransaction: boolean,
+		work: (
+			database: DrizzleDatabaseExecutor<
+				InferSelectModel<Table>,
+				DrizzleCrudCreateValues<Table>,
+				DrizzleCrudUpdateValues<Table>
+			>,
+			activeContext: CrudAdapterContext,
+		) => Promise<Result>,
+	): Promise<Result> {
+		if (context.session !== undefined) {
+			const state = this.#sessionStateFrom(context.session);
+			if (
+				requirements.accessMode === "read write" &&
+				state.transaction.accessMode === "read only"
+			) {
+				throw new CrudAdapterError(
+					"unsupported",
+					"A Drizzle CRUD mutation cannot reuse a read-only transaction.",
+				);
+			}
+			if (
+				requirements.isolationLevel === "repeatable read" &&
+				state.transaction.isolationLevel !== "repeatable read"
+			) {
+				throw new CrudAdapterError(
+					"unsupported",
+					"This Drizzle CRUD operation requires a repeatable-read transaction.",
+				);
+			}
+			if (requirements.mustOwnCommit && !state.transaction.ownsCommit) {
+				throw new CrudAdapterError(
+					"unsupported",
+					"A Drizzle CRUD mutation requires a transaction that owns the real commit.",
+				);
+			}
+			return work(state.executor, context);
+		}
+
+		if (this.#transactionRunner !== undefined || forceTransaction) {
+			return this.#runTransaction(
+				async (session) =>
+					work(this.#executorFrom(session), {
+						...context,
+						session,
+					}),
+				context,
+				requirements,
+			);
+		}
+
+		return work(this.#baseExecutor(), context);
+	}
+
+	async #runTransaction<Result>(
+		work: (session: CrudAdapterSession) => Promise<Result>,
+		context: CrudAdapterContext,
+		requirements: DrizzleCrudTransactionRequirements,
+	): Promise<Result> {
+		const transactionContext: DrizzleCrudTransactionRunnerContext = {
+			...context,
+			...requirements,
+		};
+		const enter = async (
+			database: DrizzleCrudDatabase<QueryResult, FullSchema, Schema>,
+			reportedTransaction?: DrizzleCrudEffectiveTransaction,
+		): Promise<Result> => {
+			if (typeof database !== "object" || database === null) {
+				throw new CrudAdapterError(
+					"unknown",
+					"The Drizzle transaction runner did not provide a database transaction.",
+				);
+			}
+			const effectiveTransaction = resolveEffectiveTransaction(requirements, reportedTransaction);
+			const state: DrizzleSessionState<
+				InferSelectModel<Table>,
+				DrizzleCrudCreateValues<Table>,
+				DrizzleCrudUpdateValues<Table>
+			> = {
+				executor: database as unknown as DrizzleDatabaseExecutor<
+					InferSelectModel<Table>,
+					DrizzleCrudCreateValues<Table>,
+					DrizzleCrudUpdateValues<Table>
+				>,
+				transaction: effectiveTransaction,
+			};
+			this.#activeSessions.add(state);
+			try {
+				return await work({ adapter: this.#sessionMarker, value: state });
+			} finally {
+				this.#activeSessions.delete(state);
+			}
+		};
+
+		try {
+			if (this.#transactionRunner !== undefined) {
+				return await this.#transactionRunner.run(transactionContext, enter);
+			}
+			return await this.#database.transaction(enter, {
+				accessMode: requirements.accessMode,
+				isolationLevel: requirements.isolationLevel,
+			});
+		} catch (error) {
+			if (isCrudAdapterError(error)) throw error;
+			if (postgresCode(error) !== undefined) throw databaseError(error);
+			throw error;
+		}
+	}
+
+	async #composePredicate(
+		predicate: CrudPredicate | undefined,
+		context: CrudAdapterContext,
+	): Promise<SQL | undefined> {
+		const compiled =
+			predicate === undefined ? undefined : compileDrizzlePredicate(predicate, this.#columns);
+		if (this.#rowPredicate === undefined) return compiled;
+		const nativePredicate = await this.#rowPredicate({ table: this.#table, context });
+		if (nativePredicate === undefined || nativePredicate === null) {
+			throw new CrudAdapterError(
+				"unknown",
+				"The configured Drizzle row predicate did not return a SQL expression.",
+			);
+		}
+		return compiled === undefined
+			? nativePredicate
+			: (and(compiled, nativePredicate) ?? sql`false`);
+	}
+
+	async #composeRequiredPredicate(
+		predicate: CrudPredicate,
+		context: CrudAdapterContext,
+	): Promise<SQL> {
+		const composed = await this.#composePredicate(predicate, context);
+		if (composed === undefined) {
+			throw new CrudAdapterError("unknown", "A required Drizzle CRUD predicate was omitted.");
+		}
+		return composed;
+	}
+
+	#baseExecutor(): DrizzleDatabaseExecutor<
 		InferSelectModel<Table>,
 		DrizzleCrudCreateValues<Table>,
 		DrizzleCrudUpdateValues<Table>
 	> {
-		const session = context.session;
-		if (!session)
-			return this.#database as unknown as DrizzleDatabaseExecutor<
-				InferSelectModel<Table>,
-				DrizzleCrudCreateValues<Table>,
-				DrizzleCrudUpdateValues<Table>
-			>;
-		return this.#executorFrom(session);
+		return this.#database as unknown as DrizzleDatabaseExecutor<
+			InferSelectModel<Table>,
+			DrizzleCrudCreateValues<Table>,
+			DrizzleCrudUpdateValues<Table>
+		>;
 	}
 
 	#executorFrom(
@@ -291,18 +633,34 @@ export class DrizzleCrudAdapter<
 		DrizzleCrudCreateValues<Table>,
 		DrizzleCrudUpdateValues<Table>
 	> {
+		return this.#sessionStateFrom(session).executor;
+	}
+
+	#sessionStateFrom(
+		session: CrudAdapterSession,
+	): DrizzleSessionState<
+		InferSelectModel<Table>,
+		DrizzleCrudCreateValues<Table>,
+		DrizzleCrudUpdateValues<Table>
+	> {
 		if (
 			session.adapter !== this.#sessionMarker ||
 			typeof session.value !== "object" ||
 			session.value === null ||
-			!this.#activeSessions.has(session.value)
+			!this.#activeSessions.has(
+				session.value as DrizzleSessionState<
+					InferSelectModel<Table>,
+					DrizzleCrudCreateValues<Table>,
+					DrizzleCrudUpdateValues<Table>
+				>,
+			)
 		) {
 			throw new CrudAdapterError(
 				"unknown",
 				"A transaction session is foreign or no longer active.",
 			);
 		}
-		return session.value as DrizzleDatabaseExecutor<
+		return session.value as DrizzleSessionState<
 			InferSelectModel<Table>,
 			DrizzleCrudCreateValues<Table>,
 			DrizzleCrudUpdateValues<Table>

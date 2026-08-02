@@ -8,7 +8,7 @@ sanitizes Prisma/database failures.
 The `0.1` alpha is certified for PostgreSQL only.
 
 ```sh
-pnpm add @nestm/crud @nestm/crud-prisma @prisma/client
+pnpm add @nestm/crud@alpha @nestm/crud-prisma@alpha @prisma/client
 ```
 
 ```ts

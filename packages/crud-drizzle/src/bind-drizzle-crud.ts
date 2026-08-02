@@ -3,6 +3,7 @@ import {
 	type CrudAdapterProvider,
 	type CrudBindingMappings,
 	type CompleteCrudFieldSelection,
+	type CrudScopeCreateField,
 	type CrudResourceBinding,
 } from "@nestm/crud/adapter";
 import type { ModuleMetadata } from "@nestjs/common";
@@ -21,6 +22,7 @@ interface BindDrizzleCrudOptionsBase<
 	Fields extends readonly string[],
 	CreateValues extends object,
 	UpdateValues extends object,
+	ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[],
 > {
 	readonly resource: Resource;
 	readonly imports?: ModuleMetadata["imports"];
@@ -29,8 +31,11 @@ interface BindDrizzleCrudOptionsBase<
 		Resource,
 		NoInfer<RecordType>,
 		NoInfer<CreateValues>,
-		NoInfer<UpdateValues>
+		NoInfer<UpdateValues>,
+		NoInfer<ScopeCreateFields[number]>
 	>;
+	/** Insert fields supplied by CRUD scopes through `mappings.scopeCreate`. */
+	readonly scopeCreateFields?: ScopeCreateFields;
 	/** Standard Nest provider form for an adapter; injected databases remain application-owned. */
 	readonly adapter: DrizzleCrudAdapterProvider<RecordType, CreateValues, UpdateValues>;
 }
@@ -41,7 +46,16 @@ export type BindDrizzleCrudOptions<
 	Fields extends readonly string[] = readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
-> = BindDrizzleCrudOptionsBase<Resource, RecordType, Fields, CreateValues, UpdateValues> &
+	ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[] =
+		readonly [],
+> = BindDrizzleCrudOptionsBase<
+	Resource,
+	RecordType,
+	Fields,
+	CreateValues,
+	UpdateValues,
+	ScopeCreateFields
+> &
 	CompleteCrudFieldSelection<Resource, Fields>;
 
 /** Creates a core binding without taking ownership of the application's Drizzle client. */
@@ -51,8 +65,24 @@ export function bindDrizzleCrud<
 	const Fields extends readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	const ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[] =
+		readonly [],
 >(
-	options: BindDrizzleCrudOptions<Resource, RecordType, Fields, CreateValues, UpdateValues>,
-): CrudResourceBinding<Resource, RecordType, Fields, CreateValues, UpdateValues> {
+	options: BindDrizzleCrudOptions<
+		Resource,
+		RecordType,
+		Fields,
+		CreateValues,
+		UpdateValues,
+		ScopeCreateFields
+	>,
+): CrudResourceBinding<
+	Resource,
+	RecordType,
+	Fields,
+	CreateValues,
+	UpdateValues,
+	ScopeCreateFields[number]
+> {
 	return defineCrudBinding(options);
 }

@@ -165,6 +165,9 @@ function snapshotResourceDefinition<Definition extends CrudResourceDefinition>(
 function snapshotEnhancers<Enhancers extends CrudEnhancers>(enhancers: Enhancers): Enhancers {
 	return Object.freeze({
 		...enhancers,
+		...(enhancers.decorators === undefined
+			? {}
+			: { decorators: Object.freeze([...enhancers.decorators]) }),
 		...(enhancers.guards === undefined ? {} : { guards: Object.freeze([...enhancers.guards]) }),
 		...(enhancers.interceptors === undefined
 			? {}

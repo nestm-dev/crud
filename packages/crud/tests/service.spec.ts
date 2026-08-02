@@ -2,6 +2,7 @@ import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 
 import { defineCrudBinding } from "../src/adapter/binding.types.ts";
+import type { CrudAdapter } from "../src/adapter/adapter.types.ts";
 import { HmacSha256CrudCursorCodec } from "../src/cursor/hmac-sha256-cursor-codec.ts";
 import { resolveCrudModuleOptions } from "../src/module/crud-module.options.ts";
 import { defineCrudResource } from "../src/resource/define-resource.ts";
@@ -52,9 +53,15 @@ describe("CrudService visibility and identity", () => {
 		await expect(service.list({ page: "1" })).rejects.toMatchObject({ status: 500 });
 	});
 
-	it("applies scopes to list/read and lets scope values override client create input", async () => {
+	it("applies scopes to reads and applies create values only while inserting", async () => {
 		const adapter = new FakeCrudAdapter([
-			{ id: 1, tenantId: "tenant-a", name: "Visible", deletedAt: null },
+			{
+				id: 1,
+				tenantId: "tenant-a",
+				ownerId: "original-owner",
+				name: "Visible",
+				deletedAt: null,
+			},
 			{ id: 2, tenantId: "tenant-b", name: "Hidden", deletedAt: null },
 		]);
 		const tenantScope: CrudScope<typeof userResource> = {
@@ -65,7 +72,7 @@ describe("CrudService visibility and identity", () => {
 					operator: "eq",
 					value: "tenant-a",
 				},
-				createValues: { tenantId: "tenant-a" },
+				createValues: { tenantId: "tenant-a", ownerId: "current-admin" },
 			}),
 		};
 		const { service } = createUserService({ adapter, scopes: [tenantScope] });
@@ -79,6 +86,84 @@ describe("CrudService visibility and identity", () => {
 			service.create({ name: "Scoped create", tenantId: "tenant-b" }),
 		).resolves.toMatchObject({ tenantId: "tenant-a" });
 		expect(adapter.snapshot().at(-1)).toMatchObject({ tenantId: "tenant-a" });
+
+		await service.update({ id: 1 }, { name: "Updated by admin" });
+		expect(adapter.snapshot()[0]).toMatchObject({
+			name: "Updated by admin",
+			ownerId: "original-owner",
+		});
+	});
+
+	it("applies only explicitly declared scope update values to updates", async () => {
+		const adapter = new FakeCrudAdapter([
+			{ id: 1, tenantId: "tenant-a", name: "Before", deletedAt: null },
+		]);
+		const scope: CrudScope<typeof userResource> = {
+			resolve: () => ({
+				predicate: {
+					kind: "comparison",
+					field: "tenantId",
+					operator: "eq",
+					value: "tenant-a",
+				},
+				createValues: { tenantId: "create-only" },
+				updateValues: { tenantId: "explicit-update" },
+			}),
+		};
+		const { service } = createUserService({ adapter, scopes: [scope] });
+
+		await service.update({ id: 1 }, { name: "After" });
+		expect(adapter.snapshot()[0]).toMatchObject({
+			name: "After",
+			tenantId: "explicit-update",
+		});
+	});
+
+	it("fails closed when a declared scope-owned create field is not materialized", async () => {
+		type ScopedCreateValues = {
+			readonly name: string;
+			readonly tenantId: string;
+			readonly deletedAt: null;
+		};
+		const adapter = new FakeCrudAdapter();
+		const typedAdapter: CrudAdapter<
+			Record<string, unknown>,
+			ScopedCreateValues,
+			Partial<ScopedCreateValues>
+		> = adapter;
+		const scopeCreateFields: "tenantId"[] = ["tenantId"];
+		const binding = defineCrudBinding({
+			resource: userResource,
+			adapter: { useValue: typedAdapter },
+			fields: ["id", "name", "tenantId", "deletedAt"],
+			scopeCreateFields,
+			mappings: {
+				create: (input) => ({ name: input.name, deletedAt: null }),
+				update: () => ({}),
+				persistence: () => ({}),
+				response: (record) => ({
+					id: Number(record.id),
+					name: String(record.name),
+					tenantId: String(record.tenantId),
+					deletedAt: null,
+				}),
+			},
+		});
+		scopeCreateFields.push("tenantId");
+		expect(binding.scopeCreateFields).toEqual(["tenantId"]);
+		expect(Object.isFrozen(binding.scopeCreateFields)).toBe(true);
+		const service = new CrudService(
+			userResource,
+			binding,
+			typedAdapter,
+			[],
+			[{ resolve: () => ({ createValues: {} }) }],
+			new CrudRegistry(),
+			resolveCrudModuleOptions({}),
+		);
+
+		await expect(service.create({ name: "Rejected" })).rejects.toMatchObject({ status: 500 });
+		expect(adapter.calls.create).toBe(0);
 	});
 
 	it("uses every composite ID component when reading", async () => {
@@ -141,6 +226,21 @@ describe("CrudService cursor pagination", () => {
 });
 
 describe("CrudService transaction and lifecycle semantics", () => {
+	it("maps adapter errors from a duplicated package copy", async () => {
+		const adapter = new FakeCrudAdapter();
+		vi.spyOn(adapter, "create").mockRejectedValue({
+			name: "CrudAdapterError",
+			code: "conflict",
+			message: "duplicate package error",
+			retryable: false,
+		});
+		const { service } = createUserService({ adapter });
+
+		await expect(service.create({ name: "Duplicate", tenantId: "tenant-a" })).rejects.toMatchObject(
+			{ status: 409 },
+		);
+	});
+
 	it("runs before/after hooks inside the transaction and afterCommit after commit", async () => {
 		const events: string[] = [];
 		const adapter = new FakeCrudAdapter([], {}, events);

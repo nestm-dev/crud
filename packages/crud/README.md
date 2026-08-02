@@ -47,13 +47,26 @@ adapter factories may still resolve asynchronously.
 - One-hop `belongsTo`, `hasOne`, and `hasMany` includes are batched and always
   apply the target scope and soft-delete policy. An over-bound to-many include
   returns `422` instead of truncating.
-- Ordered scopes constrain list/count/read/mutations/restore/relations and their
-  create values override client values. Before/after mutation hooks run in the
+- Ordered scopes constrain list/count/read/mutations/restore/relations. Scope
+  `createValues` apply only to inserts; a scope must opt into update overwrites
+  with distinct `updateValues`. Before/after mutation hooks run in the
   transaction; `afterCommit` failures go to the configured error sink.
+- Binding `scopeCreateFields` declares adapter insert fields supplied by scopes
+  through `mappings.scopeCreate`. Only declared fields may be omitted by
+  `mappings.create`; missing declared values fail closed before adapter create.
+- `enhancers.decorators` carries opaque Nest class decorators at resource level
+  and method decorators at operation or `queryDeletedEnhancers` level. This lets
+  integrations attach authorization metadata without coupling CRUD to them.
 
 Invalid inputs, queries, and cursors map to `400`, scope-hidden and absent rows
 to `404`, unique conflicts to `409`, over-bound includes to `422`, and sanitized
 unexpected adapter or transactional-hook failures to `500`.
+
+Adapter `transaction()` implementations must resolve only after the transaction
+they own has really committed. A savepoint or joined ambient transaction cannot
+satisfy this contract for mutations because CRUD runs `afterCommit` immediately
+after `transaction()` resolves. `isCrudAdapterError()` is the cross-package-copy
+error discriminator for adapter and integration authors.
 
 When a custom controller injects `CrudService` with `@InjectCrud(resource)`, it
 reuses the orchestration but not the generated controller's decorators. Apply
