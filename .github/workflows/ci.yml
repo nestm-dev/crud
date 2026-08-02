@@ -14,7 +14,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: pnpm }
@@ -28,7 +28,7 @@ jobs:
       matrix:
         node: [22, 24]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: "${{ matrix.node }}", cache: pnpm }
@@ -54,7 +54,7 @@ jobs:
           --health-retries 30
           --health-start-period 5s
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: pnpm }
@@ -70,7 +70,7 @@ jobs:
       matrix:
         package: [crud, crud-memory, crud-typeorm, crud-drizzle, crud-prisma]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: pnpm }
@@ -82,7 +82,7 @@ jobs:
   consumer-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: pnpm }
@@ -94,7 +94,7 @@ jobs:
     continue-on-error: true
     if: github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: pnpm }
