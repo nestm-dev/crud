@@ -1,5 +1,12 @@
 # @nestm/crud-typeorm
 
+## 0.1.0-alpha.2
+
+### Patch Changes
+
+- Updated dependencies [b50c6ef]
+  - @nestm/crud@0.1.0-alpha.2
+
 ## 0.1.0-alpha.1
 
 ### Patch Changes
