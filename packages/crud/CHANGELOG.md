@@ -1,5 +1,13 @@
 # @nestm/crud
 
+## 0.1.0-alpha.2
+
+### Minor Changes
+
+- b50c6ef: Emit versioned CRUD filter metadata and add an optional Swagger UI condition
+  builder with field, operator, value, and add/remove controls while preserving
+  the existing bracket-query HTTP contract.
+
 ## 0.1.0-alpha.1
 
 ### Minor Changes
