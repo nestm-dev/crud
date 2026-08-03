@@ -1,15 +1,12 @@
 {
-  "mode": "pre",
-  "tag": "alpha",
-  "initialVersions": {
-    "@nestm/crud": "0.1.0-alpha.0",
-    "@nestm/crud-memory": "0.1.0-alpha.0",
-    "@nestm/crud-typeorm": "0.1.0-alpha.0",
-    "@nestm/crud-drizzle": "0.1.0-alpha.0",
-    "@nestm/crud-prisma": "0.1.0-alpha.0"
-  },
-  "changesets": [
-    "drizzle-transaction-boundaries",
-    "initial-crud-alpha"
-  ]
+	"mode": "pre",
+	"tag": "alpha",
+	"initialVersions": {
+		"@nestm/crud": "0.1.0-alpha.0",
+		"@nestm/crud-memory": "0.1.0-alpha.0",
+		"@nestm/crud-typeorm": "0.1.0-alpha.0",
+		"@nestm/crud-drizzle": "0.1.0-alpha.0",
+		"@nestm/crud-prisma": "0.1.0-alpha.0"
+	},
+	"changesets": ["drizzle-transaction-boundaries", "initial-crud-alpha"]
 }

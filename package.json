@@ -35,6 +35,7 @@
 		"verify:consumer": "node .github/scripts/verify-consumers.mjs",
 		"verify": "pnpm run check && pnpm run test && pnpm run test:postgres && pnpm run verify:pack && pnpm run verify:consumer",
 		"changeset": "changeset",
+		"release:version": "node scripts/version.mjs",
 		"release": "node scripts/publish.mjs"
 	},
 	"devDependencies": {

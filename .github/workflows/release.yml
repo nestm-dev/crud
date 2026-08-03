@@ -58,7 +58,7 @@ jobs:
         uses: changesets/action@v1
         with:
           publish: pnpm run release
-          version: pnpm changeset version
+          version: pnpm run release:version
           title: "chore: release @nestm/crud"
           commit: "chore: release @nestm/crud"
           createGithubReleases: true
