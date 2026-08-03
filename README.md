@@ -130,6 +130,31 @@ const document = SwaggerModule.createDocument(app, swaggerConfig, {
 
 Schemas with native Standard JSON Schema output do not need a vendor converter.
 
+### Interactive filter builder
+
+Generated list operations with configured filters include versioned
+`x-nestm-crud-query` metadata in addition to their normal OpenAPI query
+parameters. Install the optional Swagger UI plugin to replace the flat filter
+inputs with field/operator/value rows and `+` / `−` controls:
+
+```ts
+import { NestMCrudQuerySwaggerUiPlugin, NESTM_CRUD_SWAGGER_UI_CSS } from "@nestm/crud/swagger-ui";
+
+SwaggerModule.setup("docs", app, document, {
+	swaggerOptions: {
+		plugins: [NestMCrudQuerySwaggerUiPlugin],
+	},
+	customCss: NESTM_CRUD_SWAGGER_UI_CSS,
+});
+```
+
+The builder supports only the filter operations already declared by the
+resource. Rows are combined with `AND`; list and range values remain
+comma-separated. It writes into the existing
+`filter[field][operator]` parameters, so enabling the plugin does not change
+the HTTP contract, parser, predicate model, or persistence adapters. Without the
+plugin, Swagger UI continues to show the ordinary generated parameters.
+
 ## HTTP contract
 
 | Operation | Route                     | Response                |

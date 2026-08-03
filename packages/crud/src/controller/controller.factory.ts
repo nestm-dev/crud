@@ -21,7 +21,7 @@ import {
 	type Type,
 } from "@nestjs/common";
 import { PARAMTYPES_METADATA } from "@nestjs/common/constants";
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
+import { ApiExtension, ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 
 import { getCrudServiceToken } from "../module/crud.tokens.ts";
 import { resolveCrudPaginationModes } from "../query/pagination.ts";
@@ -40,6 +40,10 @@ import type {
 import type { CrudService } from "../runtime/crud.service.ts";
 import { createCrudPageSchema } from "../schema/page-schema.ts";
 import { getCrudSchema } from "../schema/schema.types.ts";
+import {
+	CRUD_QUERY_OPENAPI_EXTENSION,
+	createCrudQueryOpenApiExtension,
+} from "../swagger-ui/query-extension.ts";
 import { CrudContext } from "./crud-context.decorator.ts";
 import {
 	createNestErrorResponseSchema,
@@ -274,6 +278,15 @@ function decorateSwaggerQueries(
 		);
 	}
 	if (operation !== "list") return;
+	const extension = createCrudQueryOpenApiExtension(resource);
+	if (extension !== undefined) {
+		applyMethod(
+			ApiExtension(CRUD_QUERY_OPENAPI_EXTENSION, extension),
+			controller,
+			operation,
+			descriptor,
+		);
+	}
 	const stringNames: string[] = [];
 	for (const [field, config] of Object.entries(resource.query?.filters ?? {})) {
 		for (const operator of config.operators) stringNames.push(`filter[${field}][${operator}]`);

@@ -27,6 +27,7 @@
 		"paths": {
 			"@nestm/crud": ["./packages/crud/src/index.ts"],
 			"@nestm/crud/adapter": ["./packages/crud/src/adapter/index.ts"],
+			"@nestm/crud/swagger-ui": ["./packages/crud/src/swagger-ui/index.ts"],
 			"@nestm/crud/testing": ["./packages/crud/src/testing/index.ts"],
 			"@nestm/crud-memory": ["./packages/crud-memory/src/index.ts"],
 			"@nestm/crud-typeorm": ["./packages/crud-typeorm/src/index.ts"],

@@ -14,6 +14,10 @@ import { getCrudServiceToken } from "../src/module/crud.tokens.ts";
 import { defineCrudResource } from "../src/resource/define-resource.ts";
 import { crudOperations } from "../src/resource/operations.ts";
 import { withCrudStandardSchemaConverter } from "../src/schema/page-schema.ts";
+import {
+	CRUD_QUERY_OPENAPI_EXTENSION,
+	type CrudQueryOpenApiExtension,
+} from "../src/swagger-ui/query-extension.ts";
 
 const contracts = {
 	id: z.object({ id: z.coerce.number().int().positive() }),
@@ -86,7 +90,12 @@ const relatedResource = defineCrudResource({
 	idFields: { id: "id" },
 	contracts,
 	operations: crudOperations.readOnly(),
-	query: { pagination: { offset: true } },
+	query: {
+		filters: {
+			name: { schema: z.string(), operators: ["eq", "icontains", "in", "isnull"] },
+		},
+		pagination: { offset: true },
+	},
 	relations: {
 		children: {
 			type: "hasMany",
@@ -203,6 +212,50 @@ describe("generated OpenAPI contract matrix", () => {
 		expect(offsetList.responses["422"]).toBeUndefined();
 		expect(relatedList.responses["422"]).toBeDefined();
 		expect(relatedRead.responses["422"]).toBeDefined();
+	});
+
+	it("emits versioned UI metadata that maps to unchanged formal filter parameters", () => {
+		const relatedList = operation(document, "/matrix/related", "get");
+		const extension = (
+			relatedList as OperationObject & {
+				readonly [CRUD_QUERY_OPENAPI_EXTENSION]: CrudQueryOpenApiExtension;
+			}
+		)[CRUD_QUERY_OPENAPI_EXTENSION];
+
+		expect(extension).toEqual({
+			version: 1,
+			conjunction: "and",
+			conditions: [
+				{
+					field: "name",
+					operator: "eq",
+					parameter: "filter[name][eq]",
+					valueKind: "scalar",
+				},
+				{
+					field: "name",
+					operator: "icontains",
+					parameter: "filter[name][icontains]",
+					valueKind: "scalar",
+				},
+				{
+					field: "name",
+					operator: "in",
+					parameter: "filter[name][in]",
+					valueKind: "csv-list",
+				},
+				{
+					field: "name",
+					operator: "isnull",
+					parameter: "filter[name][isnull]",
+					valueKind: "boolean",
+				},
+			],
+		});
+		const names = new Set(queryParameterNames(relatedList));
+		for (const condition of extension.conditions) {
+			expect(names.has(condition.parameter)).toBe(true);
+		}
 	});
 
 	it("emits operation-specific Nest exception responses", () => {

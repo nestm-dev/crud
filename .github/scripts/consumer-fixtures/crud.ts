@@ -3,6 +3,7 @@ import "reflect-metadata";
 
 import * as crud from "@nestm/crud";
 import * as adapter from "@nestm/crud/adapter";
+import * as swaggerUi from "@nestm/crud/swagger-ui";
 import * as testing from "@nestm/crud/testing";
 
 assert.equal(typeof crud.CrudModule, "function");
@@ -10,6 +11,9 @@ assert.equal(typeof crud.defineCrudResource, "function");
 assert.equal(typeof adapter.defineCrudBinding, "function");
 assert.equal(typeof adapter.CrudAdapterError, "function");
 assert.equal(typeof adapter.isCrudAdapterError, "function");
+assert.equal(swaggerUi.CRUD_QUERY_OPENAPI_EXTENSION, "x-nestm-crud-query");
+assert.equal(typeof swaggerUi.NestMCrudQuerySwaggerUiPlugin, "function");
+assert.equal(typeof swaggerUi.NESTM_CRUD_SWAGGER_UI_CSS, "string");
 assert.equal(typeof testing.runCrudAdapterConformance, "function");
 assert.equal(typeof testing.InsecureCrudCursorCodec, "function");
 
