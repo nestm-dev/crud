@@ -14,6 +14,7 @@ import {
 } from "../src/controller/controller.factory.ts";
 import { defineCrudResource } from "../src/resource/define-resource.ts";
 import { crudOperations } from "../src/resource/operations.ts";
+import { CRUD_QUERY_OPENAPI_EXTENSION } from "../src/swagger-ui/query-extension.ts";
 
 const routeResource = defineCrudResource({
 	name: "billing-items",
@@ -82,6 +83,21 @@ describe("generated CRUD controller metadata", () => {
 		expect(listQueryNames).toEqual(
 			expect.arrayContaining(["filter[name][eq]", "sort", "deleted", "page", "limit"]),
 		);
+		expect(Reflect.getMetadata("swagger/apiExtension", listHandler)).toEqual({
+			[CRUD_QUERY_OPENAPI_EXTENSION]: {
+				version: 1,
+				conjunction: "and",
+				conditions: [
+					{
+						field: "name",
+						operator: "eq",
+						parameter: "filter[name][eq]",
+						valueKind: "scalar",
+					},
+				],
+			},
+		});
+		expect(Reflect.getMetadata("swagger/apiExtension", readHandler)).toBeUndefined();
 
 		const readResponses = Reflect.getMetadata("swagger/apiResponse", readHandler) as Record<
 			string,

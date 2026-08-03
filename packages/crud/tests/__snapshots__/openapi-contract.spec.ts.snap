@@ -2327,6 +2327,38 @@ exports[`generated OpenAPI contract matrix > matches the complete generated Open
         "parameters": [
           {
             "in": "query",
+            "name": "filter[name][eq]",
+            "required": false,
+            "schema": {
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "filter[name][icontains]",
+            "required": false,
+            "schema": {
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "filter[name][in]",
+            "required": false,
+            "schema": {
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "filter[name][isnull]",
+            "required": false,
+            "schema": {
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
             "name": "include",
             "required": false,
             "schema": {
@@ -2577,6 +2609,36 @@ exports[`generated OpenAPI contract matrix > matches the complete generated Open
         "tags": [
           "openapi-related",
         ],
+        "x-nestm-crud-query": {
+          "conditions": [
+            {
+              "field": "name",
+              "operator": "eq",
+              "parameter": "filter[name][eq]",
+              "valueKind": "scalar",
+            },
+            {
+              "field": "name",
+              "operator": "icontains",
+              "parameter": "filter[name][icontains]",
+              "valueKind": "scalar",
+            },
+            {
+              "field": "name",
+              "operator": "in",
+              "parameter": "filter[name][in]",
+              "valueKind": "csv-list",
+            },
+            {
+              "field": "name",
+              "operator": "isnull",
+              "parameter": "filter[name][isnull]",
+              "valueKind": "boolean",
+            },
+          ],
+          "conjunction": "and",
+          "version": 1,
+        },
       },
     },
     "/matrix/related/{id}": {

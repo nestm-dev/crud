@@ -46,6 +46,11 @@
 			"import": "./dist/adapter/index.mjs",
 			"default": "./dist/adapter/index.mjs"
 		},
+		"./swagger-ui": {
+			"types": "./dist/swagger-ui/index.d.mts",
+			"import": "./dist/swagger-ui/index.mjs",
+			"default": "./dist/swagger-ui/index.mjs"
+		},
 		"./testing": {
 			"types": "./dist/testing/index.d.mts",
 			"import": "./dist/testing/index.mjs",

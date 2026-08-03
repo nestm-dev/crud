@@ -1,7 +1,12 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-	entry: ["src/index.ts", "src/adapter/index.ts", "src/testing/index.ts"],
+	entry: [
+		"src/index.ts",
+		"src/adapter/index.ts",
+		"src/swagger-ui/index.ts",
+		"src/testing/index.ts",
+	],
 	format: ["esm"],
 	platform: "node",
 	target: "node22",
