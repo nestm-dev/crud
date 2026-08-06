@@ -50,6 +50,7 @@ export type {
 	CrudLifecycleHook,
 	CrudMutationEvent,
 	CrudOperationContext,
+	CrudProjection,
 	CrudScope,
 	CrudScopeResult,
 } from "./runtime/runtime.types.ts";

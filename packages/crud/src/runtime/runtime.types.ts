@@ -36,6 +36,42 @@ export interface CrudLifecycleHook<Resource extends AnyCrudResource = AnyCrudRes
 	afterCommit?(event: CrudMutationEvent<Resource>): void | Promise<void>;
 }
 
+/**
+ * Resolves response fields that are not columns of the resource's own table.
+ *
+ * The motivating shape is an aggregate — `artifactCount` on a project, `memberCount` on an
+ * organization — which an adapter cannot select without a join and a `groupBy`, and which is
+ * therefore invisible to the persistence layer by design.
+ *
+ * `project` receives the WHOLE page at once and returns one entry per record, index-aligned with
+ * `records`. Batching is the entire point: a per-record hook would issue one aggregate query per
+ * row, which is the N+1 that made these resources not worth generating in the first place.
+ *
+ * Returning a shorter array, or one with holes, is a programming error — the missing indices
+ * simply contribute nothing, and the response mapping sees `undefined` for those fields.
+ *
+ * @example
+ * ```ts
+ * @Injectable()
+ * export class ProjectArtifactCounts implements CrudProjection {
+ *   constructor(private readonly projects: ProjectsRepository) {}
+ *
+ *   async project(records: readonly ProjectRow[]) {
+ *     const counts = await this.projects.countArtifactsByProject(records.map((r) => r.id));
+ *     return records.map((record) => ({ artifactCount: counts.get(record.id) ?? 0 }));
+ *   }
+ * }
+ * ```
+ */
+export interface CrudProjection<Resource extends AnyCrudResource = AnyCrudResource> {
+	project(
+		records: readonly unknown[],
+		context: CrudOperationContext<Resource>,
+	):
+		| readonly Readonly<Record<string, unknown>>[]
+		| Promise<readonly Readonly<Record<string, unknown>>[]>;
+}
+
 export interface CrudMutationEvent<Resource extends AnyCrudResource = AnyCrudResource> {
 	readonly resource: Resource;
 	readonly operation: Extract<CrudOperationName, "create" | "update" | "delete" | "restore">;

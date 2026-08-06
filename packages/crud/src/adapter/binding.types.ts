@@ -74,9 +74,15 @@ export interface CrudBindingMappings<
 	 * and soft delete) to the adapter's update input.
 	 */
 	persistence(values: CrudValues): UpdateValues | Promise<UpdateValues>;
+	/**
+	 * `projected` carries the merged output of the resource's {@link CrudProjection}s for this
+	 * record, or `undefined` when the resource declares none. A two-argument implementation stays
+	 * assignable here, so every existing binding compiles untouched.
+	 */
 	response(
 		record: RecordType,
 		relations: Readonly<Record<string, unknown>>,
+		projected?: Readonly<Record<string, unknown>>,
 	): CrudResponseInput<Resource> | Promise<CrudResponseInput<Resource>>;
 }
 
