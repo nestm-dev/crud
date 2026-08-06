@@ -2,6 +2,11 @@ packages:
   - "packages/*"
   - "examples/*"
 
+# Keep peer-qualified ORM types on one physical instance in workspace tests.
+overrides:
+  "@types/pg": "8.20.4"
+  pg: "8.22.0"
+
 peerDependencyRules:
   allowedVersions:
     "@nestjs/common": "12"
