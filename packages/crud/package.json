@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/crud",
-	"version": "0.1.0-alpha.2",
+	"version": "0.1.0-alpha.3",
 	"description": "Type-safe generated CRUD controllers for NestJS 12.",
 	"type": "module",
 	"sideEffects": false,

@@ -8,5 +8,10 @@
 		"@nestm/crud-drizzle": "0.1.0-alpha.0",
 		"@nestm/crud-prisma": "0.1.0-alpha.0"
 	},
-	"changesets": ["drizzle-transaction-boundaries", "initial-crud-alpha", "swagger-filter-builder"]
+	"changesets": [
+		"batch-response-projections",
+		"drizzle-transaction-boundaries",
+		"initial-crud-alpha",
+		"swagger-filter-builder"
+	]
 }
