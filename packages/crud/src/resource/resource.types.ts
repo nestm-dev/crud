@@ -3,6 +3,7 @@ import { VERSION_NEUTRAL, type InjectionToken, type Type } from "@nestjs/common"
 import type {
 	CrudLifecycleHook,
 	CrudOperationContext,
+	CrudProjection,
 	CrudScope,
 } from "../runtime/runtime.types.ts";
 import type { CrudQueryConfig } from "../query/query.types.ts";
@@ -56,6 +57,12 @@ export interface CrudResourceDefinition<
 	readonly relations?: Relations;
 	readonly hooks?: readonly InjectionToken<CrudLifecycleHook>[];
 	readonly scopes?: readonly InjectionToken<CrudScope>[];
+	/**
+	 * Batch resolvers for response fields the adapter cannot select (see {@link CrudProjection}).
+	 * Each runs once per page; their results are merged in declaration order, so a later
+	 * projection overwrites an earlier one on key collision.
+	 */
+	readonly projections?: readonly InjectionToken<CrudProjection>[];
 	readonly enhancers?: CrudEnhancers;
 	readonly tags?: readonly string[];
 	readonly version?: CrudVersion;

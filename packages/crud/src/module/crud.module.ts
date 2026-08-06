@@ -13,7 +13,7 @@ import { HmacSha256CrudCursorCodec } from "../cursor/hmac-sha256-cursor-codec.ts
 import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
 import { CrudRegistry } from "../runtime/crud-registry.ts";
 import { CrudService } from "../runtime/crud.service.ts";
-import type { CrudLifecycleHook, CrudScope } from "../runtime/runtime.types.ts";
+import type { CrudLifecycleHook, CrudProjection, CrudScope } from "../runtime/runtime.types.ts";
 import {
 	resolveCrudModuleOptions,
 	type CrudModuleOptions,
@@ -129,6 +129,7 @@ function featureProviders(binding: CrudResourceBinding): readonly Provider[] {
 	const serviceToken = getCrudServiceToken(resource);
 	const hookTokens = resource.hooks ?? [];
 	const scopeTokens = resource.scopes ?? [];
+	const projectionTokens = resource.projections ?? [];
 	return [
 		{ provide: bindingToken, useValue: binding },
 		adapterProvider(adapterToken, binding),
@@ -141,6 +142,7 @@ function featureProviders(binding: CrudResourceBinding): readonly Provider[] {
 				CrudRegistry,
 				...hookTokens,
 				...scopeTokens,
+				...projectionTokens,
 			],
 			useFactory: (...dependencies: readonly unknown[]): CrudService => {
 				const adapter = dependencies[0] as CrudAdapter;
@@ -152,7 +154,14 @@ function featureProviders(binding: CrudResourceBinding): readonly Provider[] {
 					hookOffset,
 					hookOffset + hookTokens.length,
 				) as readonly CrudLifecycleHook[];
-				const scopes = dependencies.slice(hookOffset + hookTokens.length) as readonly CrudScope[];
+				const scopeOffset = hookOffset + hookTokens.length;
+				const scopes = dependencies.slice(
+					scopeOffset,
+					scopeOffset + scopeTokens.length,
+				) as readonly CrudScope[];
+				const projections = dependencies.slice(
+					scopeOffset + scopeTokens.length,
+				) as readonly CrudProjection[];
 				return new CrudService(
 					resource,
 					binding,
@@ -162,6 +171,7 @@ function featureProviders(binding: CrudResourceBinding): readonly Provider[] {
 					registry,
 					resolved,
 					cursor,
+					projections,
 				);
 			},
 		},

@@ -320,6 +320,47 @@ rolls back the mutation; an `afterCommit` failure is sent to
 An adapter transaction must resolve only after the real commit it owns; a
 savepoint or joined ambient transaction cannot satisfy this mutation contract.
 
+## Projections
+
+Some response fields are not columns. An adapter selects from one table with no
+join and no `groupBy`, so an aggregate — `artifactCount` on a project,
+`memberCount` on an organization — is invisible to it by design.
+
+A projection resolves those fields for a whole page at once:
+
+```ts
+@Injectable()
+export class ProjectArtifactCounts implements CrudProjection {
+	constructor(private readonly projects: ProjectsRepository) {}
+
+	async project(records: readonly ProjectRow[]) {
+		const counts = await this.projects.countArtifactsByProject(records.map((r) => r.id));
+		return records.map((record) => ({ artifactCount: counts.get(record.id) ?? 0 }));
+	}
+}
+
+defineCrudResource({
+	// …
+	projections: [ProjectArtifactCounts],
+});
+```
+
+`project` receives the entire page and returns one entry per record, aligned by
+index; returning a different number of entries is an error rather than a silent
+truncation. Several projections merge in declaration order, so a later one wins
+a key collision. The merged result reaches the binding as the optional third
+argument of `mappings.response(record, relations, projected?)` — `undefined`
+when the resource declares none.
+
+Batching is the point. A per-record resolver would issue one aggregate query per
+row, so projections run once per page on `list`, once per relation target set
+when an include is expanded, and once for the single record on `read` and on the
+create/update/restore responses. Mutation responses are projected too, so one
+response schema does not yield two shapes depending on the verb.
+
+Register projection tokens on the resource and make the providers available
+through the feature module's imports, exactly as for scopes and hooks.
+
 Generated routes can also carry integration-specific Nest metadata without a
 CRUD dependency on that integration:
 

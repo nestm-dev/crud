@@ -29,6 +29,7 @@ import type {
 	CrudLifecycleHook,
 	CrudMutationEvent,
 	CrudOperationContext,
+	CrudProjection,
 	CrudScope,
 	CrudScopeResult,
 } from "./runtime.types.ts";
@@ -77,6 +78,7 @@ export class CrudService<
 		readonly registry: CrudRegistry,
 		readonly options: ResolvedCrudModuleOptions,
 		readonly cursorCodec?: CrudCursorCodec,
+		readonly projections: readonly CrudProjection<Resource>[] = [],
 	) {
 		this.resource = resource;
 		this.assertCapabilities();
@@ -155,8 +157,11 @@ export class CrudService<
 		const hasNextPage = query.mode === "cursor" && result.records.length > query.limit;
 		const records = hasNextPage ? result.records.slice(0, query.limit) : result.records;
 		const relationMaps = await this.loadRelations(records, query.includes, executionContext);
+		const projected = await this.projectRecords(records, context);
 		const data = await Promise.all(
-			records.map((record, index) => this.mapRecord(record, relationMaps[index] ?? {}, context)),
+			records.map((record, index) =>
+				this.mapRecord(record, relationMaps[index] ?? {}, context, projected?.[index]),
+			),
 		);
 
 		if (query.mode === "offset") {
@@ -491,6 +496,10 @@ export class CrudService<
 				`Relation "${name}" exceeds its configured per-record bound.`,
 			);
 		}
+		const projectedTargets = await target.projectForRelation(
+			targetRecords as never,
+			executionContext,
+		);
 		const grouped = new Map<string, unknown[]>();
 		for (const record of targetRecords) {
 			const key = tupleKey(relation.foreign.map((field) => target.adapter.getField(record, field)));
@@ -513,7 +522,13 @@ export class CrudService<
 			const mapped = await Promise.all(
 				matches
 					.slice(0, relation.type === "hasMany" ? maxItems : 1)
-					.map((record) => target.mapRecordForRelation(record, executionContext)),
+					.map((record) =>
+						target.mapRecordForRelation(
+							record,
+							executionContext,
+							projectedTargets.get(record as never),
+						),
+					),
 			);
 			maps[index]![name] = relation.type === "hasMany" ? mapped : (mapped[0] ?? null);
 		}
@@ -522,16 +537,77 @@ export class CrudService<
 	async mapRecordForRelation(
 		record: RecordType,
 		executionContext?: ExecutionContext,
+		projected?: Readonly<Record<string, unknown>>,
 	): Promise<unknown> {
-		return this.mapRecord(record, {}, this.operationContext("read", executionContext));
+		return this.mapRecord(record, {}, this.operationContext("read", executionContext), projected);
+	}
+
+	/**
+	 * Projects a relation's target records as one batch, keyed by record identity.
+	 *
+	 * Without this a nested payload would silently lack the projected fields that the same
+	 * resource carries at the top level — the response schema is shared, so that asymmetry shows
+	 * up as a validation failure on the include, far from its cause.
+	 */
+	async projectForRelation(
+		records: readonly RecordType[],
+		executionContext?: ExecutionContext,
+	): Promise<ReadonlyMap<RecordType, Readonly<Record<string, unknown>>>> {
+		const projected = await this.projectRecords(
+			records,
+			this.operationContext("read", executionContext),
+		);
+		const byRecord = new Map<RecordType, Readonly<Record<string, unknown>>>();
+		if (projected === undefined) return byRecord;
+		for (const [index, record] of records.entries()) {
+			const values = projected[index];
+			if (values !== undefined) byRecord.set(record, values);
+		}
+		return byRecord;
 	}
 
 	private async mapRecord(
 		record: RecordType,
 		relations: Readonly<Record<string, unknown>>,
-		_context: CrudOperationContext<Resource>,
+		context: CrudOperationContext<Resource>,
+		projected?: Readonly<Record<string, unknown>>,
 	): Promise<CrudResponseInput<Resource>> {
-		return this.binding.mappings.response(record, relations);
+		const values = projected ?? (await this.projectRecords([record], context))?.[0];
+		return this.binding.mappings.response(record, relations, values);
+	}
+
+	/**
+	 * Runs every declared projection over the whole batch and merges them per record.
+	 *
+	 * Returns `undefined` when the resource declares no projections, so bindings written against
+	 * the two-argument `response` see exactly the previous behaviour rather than an empty object.
+	 *
+	 * Projections run concurrently with each other but each sees the entire page, so a resource
+	 * with three projections over a 24-row page issues three queries, not seventy-two.
+	 */
+	private async projectRecords(
+		records: readonly RecordType[],
+		context: CrudOperationContext<Resource>,
+	): Promise<readonly Readonly<Record<string, unknown>>[] | undefined> {
+		if (this.projections.length === 0 || records.length === 0) return undefined;
+		const results = await Promise.all(
+			this.projections.map(async (projection) => {
+				const values = await projection.project(records, context);
+				if (values.length !== records.length) {
+					throw new InternalServerErrorException(
+						`Projection for "${this.resource.name}" returned ${values.length} entries for ${records.length} records.`,
+					);
+				}
+				return values;
+			}),
+		);
+		// Declaration order decides collisions, matching how hooks and scopes compose.
+		return records.map((_record, index) =>
+			results.reduce<Record<string, unknown>>(
+				(merged, values) => Object.assign(merged, values[index]),
+				{},
+			),
+		);
 	}
 
 	private async encodeNextCursor(

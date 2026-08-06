@@ -1,10 +1,12 @@
 import { StandardSchemaModule } from "@nestm/standard-schema";
+import { Module } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { DocumentBuilder, SwaggerModule, type StandardSchemaConverter } from "@nestjs/swagger";
 import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CrudCursorCodec } from "../src/cursor/cursor.types.ts";
+import { defineCrudBinding } from "../src/adapter/binding.types.ts";
 import { CrudModule } from "../src/module/crud.module.ts";
 import type { ResolvedCrudModuleOptions } from "../src/module/crud-module.options.ts";
 import {
@@ -12,6 +14,8 @@ import {
 	CRUD_RESOLVED_OPTIONS,
 	getCrudServiceToken,
 } from "../src/module/crud.tokens.ts";
+import { defineCrudResource } from "../src/resource/define-resource.ts";
+import { crudOperations } from "../src/resource/operations.ts";
 import { CrudRegistry } from "../src/runtime/crud-registry.ts";
 import type { CrudService } from "../src/runtime/crud.service.ts";
 import { withCrudStandardSchemaConverter } from "../src/schema/page-schema.ts";
@@ -23,6 +27,85 @@ import {
 import { FakeCrudAdapter } from "./support/fake-crud-adapter.ts";
 
 describe("CrudModule", () => {
+	it("injects hooks, scopes and projections from DI without crossing their positions", async () => {
+		// The factory hands the service three slices of one flat `inject` array. Getting an offset
+		// wrong would pass a scope where a projection belongs — which type assertions cannot catch,
+		// because every slice is cast. Declaring all three, with different counts, is what pins it.
+		const HOOK = Symbol("projection-di-hook");
+		const SCOPE_A = Symbol("projection-di-scope-a");
+		const SCOPE_B = Symbol("projection-di-scope-b");
+		const PROJECTION = Symbol("projection-di-projection");
+
+		const afterCreate = vi.fn();
+		const resource = defineCrudResource({
+			name: "di-projected-records",
+			path: "di-projected-records",
+			itemPath: ":id",
+			idFields: { id: "id" },
+			contracts: {
+				id: z.object({ id: z.coerce.number().int() }),
+				create: z.object({ name: z.string() }),
+				update: z.object({ name: z.string().optional() }),
+				response: z.object({ id: z.number(), name: z.string(), rank: z.number().optional() }),
+			},
+			operations: crudOperations.readOnly(),
+			query: { pagination: { offset: true } },
+			hooks: [HOOK],
+			scopes: [SCOPE_A, SCOPE_B],
+			projections: [PROJECTION],
+		});
+		const adapter = new FakeCrudAdapter([{ id: 1, name: "First" }]);
+		const binding = defineCrudBinding({
+			resource,
+			adapter: { useValue: adapter },
+			fields: ["id", "name"],
+			mappings: {
+				create: (input) => input,
+				update: (input) => input,
+				persistence: (values) => values,
+				response: (record, _relations, projected) => ({
+					id: Number(record.id),
+					name: String(record.name),
+					...(typeof projected?.rank === "number" ? { rank: projected.rank } : {}),
+				}),
+			},
+		});
+
+		// The providers must reach the feature module, exactly as a real consumer would wire them.
+		@Module({
+			providers: [
+				{ provide: HOOK, useValue: { afterCreate } },
+				{ provide: SCOPE_A, useValue: { resolve: () => ({}) } },
+				{ provide: SCOPE_B, useValue: { resolve: () => ({}) } },
+				{
+					provide: PROJECTION,
+					useValue: { project: (records: readonly unknown[]) => records.map(() => ({ rank: 9 })) },
+				},
+			],
+			exports: [HOOK, SCOPE_A, SCOPE_B, PROJECTION],
+		})
+		class SupportModule {}
+
+		const moduleRef = await Test.createTestingModule({
+			imports: [
+				StandardSchemaModule.forRoot(),
+				CrudModule.forRoot({}),
+				CrudModule.forFeature({ imports: [SupportModule], resources: [binding] }),
+			],
+		}).compile();
+		await moduleRef.init();
+
+		const service = moduleRef.get<CrudService<typeof resource>>(getCrudServiceToken(resource));
+		expect(service.hooks).toHaveLength(1);
+		expect(service.scopes).toHaveLength(2);
+		expect(service.projections).toHaveLength(1);
+		await expect(service.list({ page: "1" })).resolves.toMatchObject({
+			data: [{ id: 1, name: "First", rank: 9 }],
+		});
+
+		await moduleRef.close();
+	});
+
 	it("wires root options, a feature controller, its service token, and registry", async () => {
 		const adapter = new FakeCrudAdapter();
 		const binding = createUserBinding(adapter);
