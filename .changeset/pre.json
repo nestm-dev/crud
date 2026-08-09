@@ -12,6 +12,7 @@
 		"batch-response-projections",
 		"drizzle-transaction-boundaries",
 		"initial-crud-alpha",
-		"swagger-filter-builder"
+		"swagger-filter-builder",
+		"typeorm-scoped-transactions"
 	]
 }

@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/crud-memory",
-	"version": "0.1.0-alpha.3",
+	"version": "0.1.0-alpha.4",
 	"description": "Transactional in-memory adapter for @nestm/crud.",
 	"type": "module",
 	"sideEffects": false,
