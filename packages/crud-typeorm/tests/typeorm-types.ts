@@ -83,5 +83,40 @@ const invalidOptions: BindTypeOrmCrudOptions<typeof resource, UserEntity, typeof
 	},
 };
 
+/**
+ * Declaring scope-owned insert fields routes them through `mappings.scopeCreate`, so an
+ * insert-only column never has to be expressible in `mappings.persistence` — the update
+ * path shares that mapper, and a field expressible there is a field a client can change.
+ *
+ * Unlike the Drizzle binder, this does NOT make create fields optional: TypeORM create
+ * values are `DeepPartial<Entity>`, so every property is already optional and there is
+ * nothing left to relax. The enforcement that a declared scope field is actually present
+ * at insert time is the runtime assertion in CRUD's service, not the type.
+ */
+const scopedBinding = bindTypeOrmCrud({
+	resource,
+	adapter: { useValue: adapter },
+	fields,
+	scopeCreateFields: ["tenantId"],
+	mappings: {
+		create: (input) => ({ name: input.name }),
+		update: (input) => (input.name === undefined ? {} : { name: input.name }),
+		scopeCreate: (values) => ({ tenantId: values.tenantId as string }),
+		persistence: () => ({}),
+		response: (record) => ({ id: record.id, name: record.name }),
+	},
+});
+
+type InvalidScopeCreateField = BindTypeOrmCrudOptions<
+	typeof resource,
+	UserEntity,
+	typeof fields,
+	// @ts-expect-error scope-owned fields must be properties of the entity's create values.
+	readonly ["notAColumn"]
+>;
+
 void binding;
 void invalidOptions;
+void scopedBinding;
+declare const invalidScopeCreateField: InvalidScopeCreateField;
+void invalidScopeCreateField;
