@@ -14,13 +14,16 @@ import {
 	type DrizzleCrudTransactionRunnerContext,
 } from "@nestm/crud-drizzle";
 import { createPrismaCrudAdapter } from "@nestm/crud-prisma";
-import { createTypeOrmCrudAdapter } from "@nestm/crud-typeorm";
+import {
+	createTypeOrmCrudAdapter,
+	type TypeOrmCrudTransactionRunnerContext,
+} from "@nestm/crud-typeorm";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { integer, pgTable, primaryKey, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { Pool } from "pg";
-import { DataSource, EntitySchema } from "typeorm";
+import { Brackets, DataSource, EntitySchema } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -57,6 +60,12 @@ let adminPool: Pool | undefined;
 let createSecuredDrizzleAdapter:
 	| ((
 			runnerContexts: DrizzleCrudTransactionRunnerContext[],
+			rowContexts: CrudAdapterContext[],
+	  ) => CrudAdapter<ItemRecord>)
+	| undefined;
+let createSecuredTypeOrmAdapter:
+	| ((
+			runnerContexts: TypeOrmCrudTransactionRunnerContext[],
 			rowContexts: CrudAdapterContext[],
 	  ) => CrudAdapter<ItemRecord>)
 	| undefined;
@@ -261,6 +270,60 @@ async function initializeHarnesses(pgUrl: string): Promise<void> {
 			createdAt: "createdAt",
 		},
 	});
+	createSecuredTypeOrmAdapter = (runnerContexts, rowContexts) =>
+		createTypeOrmCrudAdapter({
+			repository: typeOrmDataSource.getRepository(typeOrmItemSchema),
+			columns: {
+				tenantId: "tenantId",
+				id: "id",
+				name: "name",
+				score: "score",
+				category: "category",
+				createdAt: "createdAt",
+			},
+			transactionRunner: {
+				run: async (runnerContext, workWithTransaction) => {
+					runnerContexts.push(runnerContext);
+					// A query runner rather than `DataSource.transaction`: only the runner can
+					// issue `SET TRANSACTION READ ONLY`, and it has to be the first statement.
+					const queryRunner = typeOrmDataSource.createQueryRunner();
+					await queryRunner.connect();
+					await queryRunner.startTransaction(
+						runnerContext.isolationLevel === "repeatable read"
+							? "REPEATABLE READ"
+							: "READ COMMITTED",
+					);
+					try {
+						if (runnerContext.accessMode === "read only") {
+							await queryRunner.query("SET TRANSACTION READ ONLY");
+						}
+						const result = await workWithTransaction(queryRunner.manager, {
+							accessMode: runnerContext.accessMode,
+							isolationLevel: runnerContext.isolationLevel,
+							ownsCommit: true,
+						});
+						await queryRunner.commitTransaction();
+						return result;
+					} catch (error) {
+						if (queryRunner.isTransactionActive) await queryRunner.rollbackTransaction();
+						throw error;
+					} finally {
+						await queryRunner.release();
+					}
+				},
+			},
+			rowPredicate: ({ alias, context: rowContext }) => {
+				rowContexts.push(rowContext);
+				// The alias arrives as an argument. Inferring it from the builder is what makes
+				// a predicate compiled for one entity silently filter another that happens to
+				// share the column name.
+				return new Brackets((qb) =>
+					qb.where(`${alias}.tenantId = :securedTenantId`, {
+						securedTenantId: "typeorm-secured",
+					}),
+				);
+			},
+		});
 	harnesses.set("typeorm", {
 		adapter: typeOrmAdapter,
 		close: () => typeOrmDataSource.destroy(),
@@ -522,6 +585,7 @@ describe.skipIf(skipPostgres)("PostgreSQL adapter conformance", () => {
 		await Promise.all([...harnesses.values()].map((entry) => entry.close()));
 		harnesses.clear();
 		createSecuredDrizzleAdapter = undefined;
+		createSecuredTypeOrmAdapter = undefined;
 		if (adminPool !== undefined) {
 			await adminPool.query(`DROP TABLE IF EXISTS ${tableNames.join(", ")}`);
 			await adminPool.end();
@@ -973,5 +1037,66 @@ describe.skipIf(skipPostgres)("PostgreSQL adapter conformance", () => {
 		expect(runnerContexts[2]).toMatchObject({ mustOwnCommit: true });
 		expect(rowContexts).toHaveLength(3);
 		expect(rowContexts.every(({ session }) => session !== undefined)).toBe(true);
+	});
+
+	it("runs TypeORM row policy and counted totals in application-owned transactions", async () => {
+		if (createSecuredTypeOrmAdapter === undefined) {
+			throw new Error("The secured TypeORM adapter factory was not initialized.");
+		}
+		await seed(harness("typeorm").adapter, [
+			record({
+				tenantId: "typeorm-secured",
+				id: "visible",
+				name: "typeorm-secured-visible",
+				score: 1,
+			}),
+			record({
+				tenantId: "typeorm-hidden",
+				id: "hidden",
+				name: "typeorm-secured-hidden",
+				score: 2,
+			}),
+		]);
+		const runnerContexts: TypeOrmCrudTransactionRunnerContext[] = [];
+		const rowContexts: CrudAdapterContext[] = [];
+		const adapter = createSecuredTypeOrmAdapter(runnerContexts, rowContexts);
+
+		// The hidden row exists, and the predicate is the only thing keeping it out.
+		await expect(
+			adapter.findMany({ order: [], limit: 10, count: true }, context("list")),
+		).resolves.toMatchObject({
+			records: [{ tenantId: "typeorm-secured", id: "visible" }],
+			total: 1,
+		});
+		// A mutation against a hidden row reports "not found" rather than mutating it —
+		// the property a generated controller turns into 404-before-403.
+		await expect(
+			adapter.update(
+				{ predicate: identity("typeorm-hidden", "hidden"), values: { score: 99 } },
+				context("update"),
+			),
+		).resolves.toBeNull();
+		await expect(
+			adapter.delete({ predicate: identity("typeorm-hidden", "hidden") }, context("delete")),
+		).resolves.toBeNull();
+
+		expect(runnerContexts).toHaveLength(3);
+		expect(runnerContexts[0]).toMatchObject({
+			accessMode: "read only",
+			isolationLevel: "repeatable read",
+			mustOwnCommit: false,
+		});
+		expect(runnerContexts[1]).toMatchObject({ mustOwnCommit: true });
+		expect(runnerContexts[2]).toMatchObject({ mustOwnCommit: true });
+		expect(rowContexts).toHaveLength(3);
+		expect(rowContexts.every(({ session }) => session !== undefined)).toBe(true);
+
+		// The hidden row survived both mutations.
+		await expect(
+			harness("typeorm").adapter.findOne(
+				{ predicate: identity("typeorm-hidden", "hidden") },
+				context("read"),
+			),
+		).resolves.toMatchObject({ id: "hidden", score: 2 });
 	});
 });
