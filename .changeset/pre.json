@@ -11,6 +11,7 @@
 	"changesets": [
 		"batch-response-projections",
 		"drizzle-transaction-boundaries",
+		"headless-crud-features",
 		"initial-crud-alpha",
 		"swagger-filter-builder",
 		"typeorm-scoped-transactions"

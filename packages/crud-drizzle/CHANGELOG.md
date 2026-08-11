@@ -1,5 +1,12 @@
 # @nestm/crud-drizzle
 
+## 0.1.0-alpha.5
+
+### Patch Changes
+
+- Updated dependencies [5478180]
+  - @nestm/crud@0.1.0-alpha.5
+
 ## 0.1.0-alpha.4
 
 ### Patch Changes
