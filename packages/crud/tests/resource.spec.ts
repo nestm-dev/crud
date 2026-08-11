@@ -428,6 +428,24 @@ describe("CrudRegistry bootstrap validation", () => {
 		);
 	});
 
+	it.each([
+		["generated before headless", true, false],
+		["headless before generated", false, true],
+	] as const)(
+		"excludes headless entries from generated-route collisions: %s",
+		(_name, firstGenerated, secondGenerated) => {
+			const first = defineCrudResource({ ...validDefinition(), name: "first" });
+			const second = defineCrudResource({ ...validDefinition(), name: "second" });
+			const registry = new CrudRegistry();
+
+			registry.register(bindingFor(first), fakeService(), firstGenerated);
+			expect(() =>
+				registry.register(bindingFor(second), fakeService(), secondGenerated),
+			).not.toThrow();
+			expect(registry.list().map(({ resource }) => resource.name)).toEqual(["first", "second"]);
+		},
+	);
+
 	it("treats reordered version arrays as the same route versions", () => {
 		const first = defineCrudResource({ ...validDefinition(), name: "first", version: ["1", "2"] });
 		const second = defineCrudResource({

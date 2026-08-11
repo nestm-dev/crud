@@ -26,9 +26,11 @@ depends on a custom Swagger `standardSchemaConverter`, wrap that converter with
 `withCrudStandardSchemaConverter()` so list response envelopes are described.
 
 `CrudModule.forRoot()` and `forRootAsync()` provide global runtime defaults.
-`CrudModule.forFeature({ imports, resources })` is synchronous because it
-creates and registers deterministic ordinary Nest controllers before bootstrap;
-adapter factories may still resolve asynchronously.
+`CrudModule.forFeature({ imports, resources })` synchronously registers feature
+providers and, by default, deterministic ordinary Nest controllers before
+bootstrap; adapter factories may still resolve asynchronously. Pass
+`generateControllers: false` to keep the feature's bindings, registry entries,
+service providers, imports, and service exports while generating no controllers.
 
 ## Contract notes
 
@@ -60,7 +62,10 @@ adapter factories may still resolve asynchronously.
 
 Invalid inputs, queries, and cursors map to `400`, scope-hidden and absent rows
 to `404`, unique conflicts to `409`, over-bound includes to `422`, and sanitized
-unexpected adapter or transactional-hook failures to `500`.
+unexpected adapter or transactional-hook failures to `500`. Mapped conflict
+and constraint exceptions retain their `CrudAdapterError` as the internal
+`cause`, so custom facades can distinguish retryable conflicts without parsing
+or exposing persistence messages.
 
 Adapter `transaction()` implementations must resolve only after the transaction
 they own has really committed. A savepoint or joined ambient transaction cannot
@@ -68,8 +73,13 @@ satisfy this contract for mutations because CRUD runs `afterCommit` immediately
 after `transaction()` resolves. `isCrudAdapterError()` is the cross-package-copy
 error discriminator for adapter and integration authors.
 
-When a custom controller injects `CrudService` with `@InjectCrud(resource)`, it
-reuses the orchestration but not the generated controller's decorators. Apply
+For a fully custom compatibility controller, register the binding with
+`CrudModule.forFeature({ resources: [binding], generateControllers: false })`
+and inject its exported `CrudService` with `@InjectCrud(resource)`.
+`generateControllers` defaults to `true` and the opt-out applies to every
+resource in that feature call. The custom controller reuses CRUD orchestration
+but not the generated controller's route, status, authorization, validation,
+serialization, or OpenAPI decorators. Apply
 `StandardSchemaResponse(createCrudPageSchema(...))` (or Nest
 `@SerializeOptions({ schema })`) to serialize custom list responses, and apply
 the resource response schema to custom single-item responses.

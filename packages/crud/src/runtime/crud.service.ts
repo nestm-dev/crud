@@ -706,8 +706,12 @@ export class CrudService<
 		} catch (error) {
 			if (error instanceof HttpException) throw error;
 			if (isCrudAdapterError(error)) {
-				if (error.code === "conflict") throw new ConflictException("Resource conflict.");
-				if (error.code === "constraint") throw new BadRequestException("Constraint violation.");
+				if (error.code === "conflict") {
+					throw new ConflictException("Resource conflict.", { cause: error });
+				}
+				if (error.code === "constraint") {
+					throw new BadRequestException("Constraint violation.", { cause: error });
+				}
 			}
 			throw new InternalServerErrorException("Persistence operation failed.", { cause: error });
 		}

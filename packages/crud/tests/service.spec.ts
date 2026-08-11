@@ -226,20 +226,27 @@ describe("CrudService cursor pagination", () => {
 });
 
 describe("CrudService transaction and lifecycle semantics", () => {
-	it("maps adapter errors from a duplicated package copy", async () => {
-		const adapter = new FakeCrudAdapter();
-		vi.spyOn(adapter, "create").mockRejectedValue({
-			name: "CrudAdapterError",
-			code: "conflict",
-			message: "duplicate package error",
-			retryable: false,
-		});
-		const { service } = createUserService({ adapter });
+	it.each([
+		["conflict", 409, true],
+		["constraint", 400, false],
+	] as const)(
+		"maps %s adapter errors from a duplicated package copy",
+		async (code, status, retryable) => {
+			const adapter = new FakeCrudAdapter();
+			const adapterError = {
+				name: "CrudAdapterError",
+				code,
+				message: "duplicate package error",
+				retryable,
+			};
+			vi.spyOn(adapter, "create").mockRejectedValue(adapterError);
+			const { service } = createUserService({ adapter });
 
-		await expect(service.create({ name: "Duplicate", tenantId: "tenant-a" })).rejects.toMatchObject(
-			{ status: 409 },
-		);
-	});
+			await expect(
+				service.create({ name: "Duplicate", tenantId: "tenant-a" }),
+			).rejects.toMatchObject({ status, cause: adapterError });
+		},
+	);
 
 	it("runs before/after hooks inside the transaction and afterCommit after commit", async () => {
 		const events: string[] = [];

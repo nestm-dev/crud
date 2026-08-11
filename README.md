@@ -18,10 +18,12 @@ for memory, TypeORM, Drizzle ORM, and Prisma.
 | `@nestm/crud-drizzle` | PostgreSQL adapter for Drizzle ORM 0.45                                                             |
 | `@nestm/crud-prisma`  | PostgreSQL adapter for Prisma 7.9                                                                   |
 
-The package generates ordinary Nest controllers during synchronous
-`CrudModule.forFeature()` construction. It uses public dynamic-module and
-custom-provider APIs; it does not install controllers after bootstrap and never
-registers guards, pipes, interceptors, or filters globally.
+By default, the package generates ordinary Nest controllers during synchronous
+`CrudModule.forFeature()` construction. Set `generateControllers: false` for a
+headless feature that registers and exports its CRUD services without generated
+routes. The package uses public dynamic-module and custom-provider APIs; it does
+not install controllers after bootstrap and never registers guards, pipes,
+interceptors, or filters globally.
 
 ## Install
 
@@ -228,14 +230,15 @@ maps can translate those logical names to physical database columns.
 
 ## Custom controllers
 
-Disable an operation in the generated resource and inject the same orchestrator
-into an application controller:
+For a fully custom controller, make the feature headless and inject the same
+orchestrator into the application controller:
 
 ```ts
-import { Controller, Get, Query, type ExecutionContext } from "@nestjs/common";
+import { Controller, Get, Module, Query, type ExecutionContext } from "@nestjs/common";
 import {
 	createCrudPageSchema,
 	CrudContext,
+	CrudModule,
 	type CrudRawQuery,
 	CrudService,
 	InjectCrud,
@@ -258,7 +261,26 @@ export class AdminUsersController {
 		return this.crud.list(query, context);
 	}
 }
+
+@Module({
+	imports: [
+		CrudModule.forFeature({
+			resources: [usersBinding],
+			generateControllers: false,
+		}),
+	],
+	controllers: [AdminUsersController],
+})
+export class AdminUsersModule {}
 ```
+
+`generateControllers` defaults to `true`. Setting it to `false` suppresses
+controller generation for every resource in that `forFeature()` call, while
+keeping binding and adapter providers, registry entries, service exports, and
+resource imports available. This is intended for fully custom compatibility
+controllers. To replace only selected operations, leave generation enabled,
+omit those operations from the resource, and add custom routes alongside the
+generated controller.
 
 `CrudService` is where scopes, hooks, transactions, soft deletion, error
 sanitization, and response mapping run, so custom controllers reuse the same
@@ -266,7 +288,8 @@ security-sensitive path. Generated-controller serialization metadata is not
 inherited by a custom controller: apply `StandardSchemaResponse` (or Nest's
 equivalent `@SerializeOptions({ schema })`) to every custom response. Likewise,
 custom request parameters need explicit Standard Schema metadata when they are
-not plain `@Query()` objects.
+not plain `@Query()` objects. Custom controllers also own their route, status,
+authorization, validation, serialization, and OpenAPI decorators.
 
 ## Soft deletion
 
@@ -405,6 +428,10 @@ query, cursor, or database-constraint input returns `400`; missing and
 scope-hidden records return `404`; unique conflicts return `409`; over-bound
 relations return `422`. Unexpected adapter and transactional-hook failures
 return a sanitized `500`; raw ORM errors are never sent to the client.
+Mapped conflict and constraint exceptions retain the originating
+`CrudAdapterError` as their internal `cause`, allowing custom facades and logs
+to distinguish retryable conflicts without exposing persistence details on the
+wire.
 
 ## Adapter authors
 
