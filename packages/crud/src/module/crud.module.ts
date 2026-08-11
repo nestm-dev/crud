@@ -48,6 +48,8 @@ export type CrudModuleAsyncOptions<Dependencies extends readonly unknown[] = rea
 export interface CrudFeatureOptions<
 	Resources extends readonly CrudResourceBinding[] = readonly CrudResourceBinding[],
 > {
+	/** Whether to create the resources' generated controllers. @default true */
+	readonly generateControllers?: boolean;
 	readonly imports?: ModuleMetadata["imports"];
 	readonly resources: Resources;
 }
@@ -74,13 +76,18 @@ export class CrudModule {
 	static forFeature<const Resources extends readonly CrudResourceBinding[]>(
 		options: CrudFeatureOptions<Resources>,
 	): DynamicModule {
-		assertFeatureBindings(options.resources);
+		const generateControllers = options.generateControllers ?? true;
+		assertFeatureBindings(options.resources, generateControllers);
 		const imports = [
 			...(options.imports ?? []),
 			...options.resources.flatMap((binding) => binding.imports ?? []),
 		];
-		const controllers = options.resources.map(({ resource }) => createCrudController(resource));
-		const providers = options.resources.flatMap(featureProviders);
+		const controllers = generateControllers
+			? options.resources.map(({ resource }) => createCrudController(resource))
+			: [];
+		const providers = options.resources.flatMap((binding) =>
+			featureProviders(binding, generateControllers),
+		);
 		return {
 			module: CrudModule,
 			imports,
@@ -122,7 +129,10 @@ function rootModule(
 	};
 }
 
-function featureProviders(binding: CrudResourceBinding): readonly Provider[] {
+function featureProviders(
+	binding: CrudResourceBinding,
+	generateController: boolean,
+): readonly Provider[] {
 	const { resource } = binding;
 	const adapterToken = getCrudAdapterToken(resource);
 	const bindingToken = getCrudBindingToken(resource);
@@ -183,7 +193,7 @@ function featureProviders(binding: CrudResourceBinding): readonly Provider[] {
 				registeredBinding: CrudResourceBinding,
 				service: CrudService,
 			): true => {
-				registry.register(registeredBinding, service);
+				registry.register(registeredBinding, service, generateController);
 				return true;
 			},
 		},
@@ -204,6 +214,7 @@ function adapterProvider(token: InjectionToken, binding: CrudResourceBinding): P
 
 function assertFeatureBindings(
 	bindings: readonly unknown[],
+	generateControllers: boolean,
 ): asserts bindings is readonly CrudResourceBinding[] {
 	const names = new Set<string>();
 	const controllers = new Set<string>();
@@ -215,6 +226,7 @@ function assertFeatureBindings(
 			throw new TypeError(`Duplicate CRUD resource name "${binding.resource.name}".`);
 		}
 		names.add(binding.resource.name);
+		if (!generateControllers) continue;
 		const controllerName = getCrudControllerName(binding.resource);
 		if (controllers.has(controllerName)) {
 			throw new TypeError(`Duplicate generated CRUD controller name "${controllerName}".`);

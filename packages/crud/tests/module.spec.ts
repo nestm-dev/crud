@@ -1,5 +1,5 @@
 import { StandardSchemaModule } from "@nestm/standard-schema";
-import { Module } from "@nestjs/common";
+import { Controller, Module } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { DocumentBuilder, SwaggerModule, type StandardSchemaConverter } from "@nestjs/swagger";
 import { z } from "zod";
@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CrudCursorCodec } from "../src/cursor/cursor.types.ts";
 import { defineCrudBinding } from "../src/adapter/binding.types.ts";
+import { InjectCrud } from "../src/controller/inject-crud.decorator.ts";
 import { CrudModule } from "../src/module/crud.module.ts";
 import type { ResolvedCrudModuleOptions } from "../src/module/crud-module.options.ts";
 import {
@@ -106,7 +107,7 @@ describe("CrudModule", () => {
 		await moduleRef.close();
 	});
 
-	it("wires root options, a feature controller, its service token, and registry", async () => {
+	it("generates a feature controller by default and wires its service token and registry", async () => {
 		const adapter = new FakeCrudAdapter();
 		const binding = createUserBinding(adapter);
 		const feature = CrudModule.forFeature({ resources: [binding] });
@@ -129,6 +130,62 @@ describe("CrudModule", () => {
 		expect(registry.list().map(({ resource }) => resource.name)).toEqual(["users"]);
 		expect(feature.controllers?.[0]?.name).toBe("UsersCrudController");
 		expect(feature.exports).toContain(getCrudServiceToken(userResource));
+
+		await moduleRef.close();
+	});
+
+	it("registers and exports feature services without generated controllers when disabled", async () => {
+		const adapter = new FakeCrudAdapter();
+		const binding = createUserBinding(adapter);
+		const collidingResource = defineCrudResource({
+			name: "legacy-users",
+			path: userResource.path,
+			itemPath: userResource.itemPath,
+			idFields: userResource.idFields,
+			contracts: {
+				id: z.object({ id: z.coerce.number().int().positive() }),
+				create: z.object({ name: z.string().min(1) }),
+				update: z.object({ name: z.string().min(1).optional() }),
+				response: z.object({ id: z.number().int(), name: z.string() }),
+			},
+			operations: crudOperations.readOnly(),
+		});
+		const collidingBinding = defineCrudBinding({
+			resource: collidingResource,
+			adapter: { useValue: new FakeCrudAdapter() },
+			fields: ["id", "name"],
+			mappings: {
+				create: (input) => input,
+				update: (input) => input,
+				persistence: (values) => values,
+				response: (record) => ({ id: Number(record.id), name: String(record.name) }),
+			},
+		});
+		const feature = CrudModule.forFeature({
+			generateControllers: false,
+			resources: [binding, collidingBinding],
+		});
+
+		@Controller("compatibility/users")
+		class CompatibilityUsersController {
+			constructor(@InjectCrud(userResource) readonly crud: CrudService<typeof userResource>) {}
+		}
+
+		const moduleRef = await Test.createTestingModule({
+			imports: [StandardSchemaModule.forRoot(), CrudModule.forRoot(), feature],
+			controllers: [CompatibilityUsersController],
+		}).compile();
+		await moduleRef.init();
+
+		const service = moduleRef.get<CrudService<typeof userResource>>(
+			getCrudServiceToken(userResource),
+		);
+		const controller = moduleRef.get(CompatibilityUsersController);
+		const registry = moduleRef.get(CrudRegistry);
+		expect(feature.controllers).toEqual([]);
+		expect(feature.exports).toContain(getCrudServiceToken(userResource));
+		expect(controller.crud).toBe(service);
+		expect(registry.list().map(({ resource }) => resource.name)).toEqual(["users", "legacy-users"]);
 
 		await moduleRef.close();
 	});

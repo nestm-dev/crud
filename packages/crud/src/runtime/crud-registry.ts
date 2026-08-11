@@ -36,37 +36,16 @@ export class CrudRegistry implements OnApplicationBootstrap {
 
 	constructor(@Optional() private readonly applicationConfig?: ApplicationConfig) {}
 
-	register(binding: CrudResourceBinding, service: CrudService): void {
+	register(
+		binding: CrudResourceBinding,
+		service: CrudService,
+		registerGeneratedController = true,
+	): void {
 		const { resource } = binding;
 		if (this.#entries.has(resource.name)) {
 			throw new TypeError(`Duplicate CRUD resource name "${resource.name}".`);
 		}
-		const controller = controllerName(resource.name);
-		const controllerOwner = this.#controllers.get(controller);
-		if (controllerOwner !== undefined) {
-			throw new TypeError(
-				`Generated controller name "${controller}" collides for "${controllerOwner}" and "${resource.name}".`,
-			);
-		}
-		const routeSignatures: string[] = [];
-		for (const operation of Object.keys(resource.operations) as CrudOperationName[]) {
-			const [method, suffix] = ROUTES[operation];
-			const item = normalizePath(`${resource.path}/${resource.itemPath}`);
-			const path =
-				suffix === "" ? normalizePath(resource.path) : suffix === "item" ? item : `${item}/restore`;
-			for (const version of versionKeys(resource.version)) {
-				const signature = `${version}:${method}:${path}`;
-				const owner = this.#routes.get(signature);
-				if (owner !== undefined) {
-					throw new TypeError(
-						`CRUD route ${signature} is registered by both "${owner}" and "${resource.name}".`,
-					);
-				}
-				routeSignatures.push(signature);
-			}
-		}
-		for (const signature of routeSignatures) this.#routes.set(signature, resource.name);
-		this.#controllers.set(controller, resource.name);
+		if (registerGeneratedController) this.#registerGeneratedController(resource);
 		this.#entries.set(resource.name, { binding, resource, service });
 	}
 
@@ -118,6 +97,35 @@ export class CrudRegistry implements OnApplicationBootstrap {
 
 	list(): readonly CrudRegistryEntry[] {
 		return [...this.#entries.values()];
+	}
+
+	#registerGeneratedController(resource: AnyCrudResource): void {
+		const controller = controllerName(resource.name);
+		const controllerOwner = this.#controllers.get(controller);
+		if (controllerOwner !== undefined) {
+			throw new TypeError(
+				`Generated controller name "${controller}" collides for "${controllerOwner}" and "${resource.name}".`,
+			);
+		}
+		const routeSignatures: string[] = [];
+		for (const operation of Object.keys(resource.operations) as CrudOperationName[]) {
+			const [method, suffix] = ROUTES[operation];
+			const item = normalizePath(`${resource.path}/${resource.itemPath}`);
+			const path =
+				suffix === "" ? normalizePath(resource.path) : suffix === "item" ? item : `${item}/restore`;
+			for (const version of versionKeys(resource.version)) {
+				const signature = `${version}:${method}:${path}`;
+				const owner = this.#routes.get(signature);
+				if (owner !== undefined) {
+					throw new TypeError(
+						`CRUD route ${signature} is registered by both "${owner}" and "${resource.name}".`,
+					);
+				}
+				routeSignatures.push(signature);
+			}
+		}
+		for (const signature of routeSignatures) this.#routes.set(signature, resource.name);
+		this.#controllers.set(controller, resource.name);
 	}
 
 	#assertStandardSchemaRuntime(): void {
