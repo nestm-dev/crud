@@ -15,6 +15,7 @@
 		"initial-crud-alpha",
 		"nested-resources-atomic-upsert",
 		"swagger-filter-builder",
+		"transactional-reference-validation",
 		"typeorm-scoped-transactions",
 		"typeorm-selected-records"
 	]
