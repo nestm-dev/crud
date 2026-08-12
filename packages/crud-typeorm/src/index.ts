@@ -5,8 +5,11 @@ export {
 } from "./bind-typeorm-crud.ts";
 export {
 	createTypeOrmCrudAdapter,
+	createTypeOrmCrudReferenceChecker,
 	TypeOrmCrudAdapter,
+	TypeOrmCrudReferenceChecker,
 	TYPEORM_CRUD_ALIAS,
+	TYPEORM_CRUD_REFERENCE_ALIAS,
 	type TypeOrmCrudAdapterOptions,
 	type TypeOrmCrudCreateValues,
 	type TypeOrmCrudEffectiveTransaction,
@@ -14,6 +17,11 @@ export {
 	type TypeOrmCrudRowPredicateContext,
 	type TypeOrmCrudRowPredicateOptions,
 	type TypeOrmCrudRecord,
+	type TypeOrmCrudReferenceContext,
+	type TypeOrmCrudReferenceInput,
+	type TypeOrmCrudReferencePredicate,
+	type TypeOrmCrudReferencePredicateContext,
+	type TypeOrmCrudReferenceCheckerOptions,
 	type TypeOrmCrudSelectedRecord,
 	type TypeOrmCrudTransactionAccessMode,
 	type TypeOrmCrudTransactionIsolationLevel,

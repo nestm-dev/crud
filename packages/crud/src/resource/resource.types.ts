@@ -2,6 +2,7 @@ import { VERSION_NEUTRAL, type InjectionToken, type Type } from "@nestjs/common"
 
 import type {
 	CrudLifecycleHook,
+	CrudMutationValidator,
 	CrudOperationContext,
 	CrudProjection,
 	CrudScope,
@@ -69,6 +70,8 @@ export interface CrudResourceDefinition<
 	readonly softDelete?: CrudSoftDeleteConfig;
 	readonly relations?: Relations;
 	readonly hooks?: readonly InjectionToken<CrudLifecycleHook>[];
+	/** Transaction-bound mutation validators, executed in declaration order after before hooks. */
+	readonly validators?: readonly InjectionToken<CrudMutationValidator>[];
 	readonly scopes?: readonly InjectionToken<CrudScope>[];
 	/**
 	 * Batch resolvers for response fields the adapter cannot select (see {@link CrudProjection}).
@@ -462,6 +465,9 @@ export type CrudResponse<Resource extends AnyCrudResource> = SchemaOutput<
 >;
 
 export type CrudHookType<Resource extends AnyCrudResource> = Type<CrudLifecycleHook<Resource>>;
+export type CrudValidatorType<Resource extends AnyCrudResource> = Type<
+	CrudMutationValidator<Resource>
+>;
 export type CrudScopeType<Resource extends AnyCrudResource> = Type<CrudScope<Resource>>;
 
 type TupleValue<Value> = Value extends readonly (infer Item extends string)[] ? Item : never;

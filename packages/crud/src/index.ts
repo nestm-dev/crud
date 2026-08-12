@@ -37,6 +37,7 @@ export type {
 	CrudResponse,
 	CrudResponseInput,
 	CrudScopeType,
+	CrudValidatorType,
 	CrudSoftDeleteConfig,
 	CrudUpdate,
 	CrudUpsert,
@@ -51,13 +52,17 @@ export type {
 	CrudAfterCommitErrorContext,
 	CrudAfterCommitErrorHandler,
 	CrudLifecycleHook,
+	CrudMutationValidator,
 	CrudCollectionArgs,
 	CrudMutationEvent,
 	CrudOperationContext,
 	CrudProjection,
 	CrudScope,
 	CrudScopeResult,
+	CrudValidationContext,
 } from "./runtime/runtime.types.ts";
+export { defineCrudFact, provideCrudFact } from "./runtime/crud-facts.ts";
+export type { CrudFact, CrudFactEntry, CrudFacts } from "./runtime/crud-facts.ts";
 export { CrudContext } from "./controller/crud-context.decorator.ts";
 export { InjectCrud } from "./controller/inject-crud.decorator.ts";
 

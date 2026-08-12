@@ -1,11 +1,12 @@
 import { crudOperations, defineCrudResource } from "@nestm/crud";
-import type { CrudAdapter } from "@nestm/crud/adapter";
-import type { DeepPartial, Repository } from "typeorm";
+import type { CrudAdapter, CrudAdapterSession } from "@nestm/crud/adapter";
+import { Brackets, type DeepPartial, type Repository } from "typeorm";
 import { z } from "zod";
 
 import {
 	bindTypeOrmCrud,
 	createTypeOrmCrudAdapter,
+	createTypeOrmCrudReferenceChecker,
 	type BindTypeOrmCrudOptions,
 	TypeOrmCrudAdapter,
 	type TypeOrmCrudAdapterOptions,
@@ -26,6 +27,27 @@ interface UserEntity {
 }
 
 declare const repository: Repository<UserEntity>;
+
+const referenceChecker = createTypeOrmCrudReferenceChecker({
+	target: repository.target,
+	columns: { id: "id", tenantId: "tenantId" },
+});
+declare const session: CrudAdapterSession;
+const typedValidationContext = { session, facts: { tenantId: "tenant-a" } } as const;
+void referenceChecker.exists(
+	{
+		predicate: { kind: "comparison", field: "id", operator: "eq", value: 1 },
+		nativePredicate: ({ alias, context }) => {
+			const tenantId: string = context.facts.tenantId;
+			return new Brackets((where) => where.where(`${alias}.tenantId = :tenantId`, { tenantId }));
+		},
+	},
+	typedValidationContext,
+);
+// @ts-expect-error Reference checks cannot be invoked without an active session.
+void referenceChecker.exists({ predicate: { kind: "and", predicates: [] } }, {});
+// @ts-expect-error Reference checks must always declare an explicit scoped predicate.
+void referenceChecker.exists({}, { session });
 
 export const adapter = createTypeOrmCrudAdapter({
 	repository,

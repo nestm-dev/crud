@@ -21,8 +21,10 @@ import type {
 import type {
 	CrudCollectionArgs,
 	CrudLifecycleHook,
+	CrudMutationValidator,
 	CrudScope,
 } from "../src/runtime/runtime.types.ts";
+import { defineCrudFact, provideCrudFact } from "../src/runtime/crud-facts.ts";
 import { FakeCrudAdapter } from "./support/fake-crud-adapter.ts";
 
 export const typedResource = defineCrudResource({
@@ -135,6 +137,19 @@ export const typedHook: CrudLifecycleHook<typeof typedResource> = {
 	beforeUpdate: (input) => ({ ...input, label: input.label?.trim() }),
 };
 
+interface AuthorizedParent {
+	readonly id: string;
+	readonly organizationId: string | null;
+}
+
+export const authorizedParentFact = defineCrudFact<AuthorizedParent>("authorized-parent");
+export const typedFactEntry = provideCrudFact(authorizedParentFact, {
+	id: "parent-1",
+	organizationId: null,
+});
+// @ts-expect-error fact entries reject values unrelated to their declared fact type.
+export const invalidTypedFactEntry = provideCrudFact(authorizedParentFact, { id: 123 });
+
 export const typedScope: CrudScope<typeof typedResource> = {
 	resolve: (context) => ({
 		createValues: { tenantId: context.resource.name },
@@ -144,7 +159,24 @@ export const typedScope: CrudScope<typeof typedResource> = {
 			operator: "eq",
 			value: context.resource.name,
 		},
+		facts: [typedFactEntry],
 	}),
+};
+
+export const typedValidator: CrudMutationValidator<typeof typedResource> = {
+	validateCreate: (input, context) => {
+		const parent: AuthorizedParent = context.facts.require(authorizedParentFact);
+		const session = context.session;
+		void [input.count, parent.organizationId, session];
+	},
+	validateUpdate: (id, input, context) => {
+		void [id.id, input.count, context.operation];
+		// @ts-expect-error validators never expose the potentially stale pre-mutation snapshot.
+		void context.prior;
+	},
+	validateDelete: (id, context) => {
+		void [id.tenantId, context.operation];
+	},
 };
 
 export const typedBinding = defineCrudBinding({

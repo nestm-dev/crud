@@ -108,6 +108,15 @@ describe("defineCrudResource", () => {
 		expect(Object.isFrozen(resource.softDelete?.queryDeletedEnhancers?.decorators)).toBe(true);
 	});
 
+	it("snapshots and freezes mutation validator tokens", () => {
+		const validators = [Symbol("first-validator")];
+		const resource = defineCrudResource({ ...validDefinition(), validators });
+
+		validators.push(Symbol("mutated-validator"));
+		expect(resource.validators).toHaveLength(1);
+		expect(Object.isFrozen(resource.validators)).toBe(true);
+	});
+
 	it("snapshots binding fields and provider metadata", () => {
 		const resource = defineCrudResource(validDefinition());
 		const fields: string[] = ["id", "name"];

@@ -28,14 +28,16 @@ import {
 import { FakeCrudAdapter } from "./support/fake-crud-adapter.ts";
 
 describe("CrudModule", () => {
-	it("injects hooks, scopes and projections from DI without crossing their positions", async () => {
-		// The factory hands the service three slices of one flat `inject` array. Getting an offset
+	it("injects hooks, scopes, projections and validators without crossing positions", async () => {
+		// The factory hands the service four slices of one flat `inject` array. Getting an offset
 		// wrong would pass a scope where a projection belongs — which type assertions cannot catch,
 		// because every slice is cast. Declaring all three, with different counts, is what pins it.
 		const HOOK = Symbol("projection-di-hook");
 		const SCOPE_A = Symbol("projection-di-scope-a");
 		const SCOPE_B = Symbol("projection-di-scope-b");
 		const PROJECTION = Symbol("projection-di-projection");
+		const VALIDATOR_A = Symbol("projection-di-validator-a");
+		const VALIDATOR_B = Symbol("projection-di-validator-b");
 
 		const afterCreate = vi.fn();
 		const resource = defineCrudResource({
@@ -54,6 +56,7 @@ describe("CrudModule", () => {
 			hooks: [HOOK],
 			scopes: [SCOPE_A, SCOPE_B],
 			projections: [PROJECTION],
+			validators: [VALIDATOR_A, VALIDATOR_B],
 		});
 		const adapter = new FakeCrudAdapter([{ id: 1, name: "First" }]);
 		const binding = defineCrudBinding({
@@ -82,8 +85,10 @@ describe("CrudModule", () => {
 					provide: PROJECTION,
 					useValue: { project: (records: readonly unknown[]) => records.map(() => ({ rank: 9 })) },
 				},
+				{ provide: VALIDATOR_A, useValue: { validateCreate: vi.fn() } },
+				{ provide: VALIDATOR_B, useValue: { validateCreate: vi.fn() } },
 			],
-			exports: [HOOK, SCOPE_A, SCOPE_B, PROJECTION],
+			exports: [HOOK, SCOPE_A, SCOPE_B, PROJECTION, VALIDATOR_A, VALIDATOR_B],
 		})
 		class SupportModule {}
 
@@ -100,6 +105,7 @@ describe("CrudModule", () => {
 		expect(service.hooks).toHaveLength(1);
 		expect(service.scopes).toHaveLength(2);
 		expect(service.projections).toHaveLength(1);
+		expect(service.validators).toHaveLength(2);
 		await expect(service.list({ page: "1" })).resolves.toMatchObject({
 			data: [{ id: 1, name: "First", rank: 9 }],
 		});
