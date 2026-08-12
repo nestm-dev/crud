@@ -1,5 +1,11 @@
 # @nestm/crud-drizzle
 
+## 0.1.0-alpha.6
+
+### Patch Changes
+
+- @nestm/crud@0.1.0-alpha.6
+
 ## 0.1.0-alpha.5
 
 ### Patch Changes
