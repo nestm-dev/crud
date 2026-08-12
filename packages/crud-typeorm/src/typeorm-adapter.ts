@@ -14,8 +14,11 @@ import {
 	Brackets,
 	QueryFailedError,
 	type DeepPartial,
+	type EntityMetadata,
 	type EntityManager,
+	type FindOptionsSelect,
 	type ObjectLiteral,
+	type QueryDeepPartialEntity,
 	type Repository,
 	type SelectQueryBuilder,
 } from "typeorm";
@@ -24,6 +27,65 @@ import { compileTypeOrmPredicate } from "./typeorm-predicate.ts";
 
 export type TypeOrmCrudCreateValues<RecordType extends ObjectLiteral> = DeepPartial<RecordType>;
 export type TypeOrmCrudUpdateValues<RecordType extends ObjectLiteral> = DeepPartial<RecordType>;
+
+type TypeOrmCrudSelectedProperty<Value, Selection> = Selection extends true
+	? Value
+	: Selection extends object
+		? | TypeOrmCrudSelectedRecord<Extract<NonNullable<Value>, object>, Selection>
+			| Extract<Value, null | undefined>
+		: never;
+
+type TypeOrmCrudSelectedKeys<Entity extends object, Selection extends object> = {
+	[Field in keyof Entity]-?: Field extends keyof Selection
+		? [Exclude<Selection[Field], false | undefined>] extends [never]
+			? never
+			: Field
+		: never;
+}[keyof Entity];
+
+type TypeOrmCrudMaybeSelectedKeys<Entity extends object, Selection extends object> = {
+	[Field in TypeOrmCrudSelectedKeys<Entity, Selection>]: Field extends keyof Selection
+		? undefined extends Selection[Field]
+			? Field
+			: false extends Selection[Field]
+				? Field
+				: never
+		: never;
+}[TypeOrmCrudSelectedKeys<Entity, Selection>];
+
+/** Entity shape hydrated when a TypeORM-native `select` object is configured. */
+export type TypeOrmCrudSelectedRecord<Entity extends object, Selection extends object> = {
+	[
+		Field in keyof Entity as Field extends Exclude<
+			TypeOrmCrudSelectedKeys<Entity, Selection>,
+			TypeOrmCrudMaybeSelectedKeys<Entity, Selection>
+		>
+			? Field
+			: never
+	]: Field extends keyof Selection
+		? TypeOrmCrudSelectedProperty<Entity[Field], Selection[Field]>
+		: never;
+} & {
+	[
+		Field in keyof Entity as Field extends TypeOrmCrudMaybeSelectedKeys<Entity, Selection>
+			? Field
+			: never
+	]?: Field extends keyof Selection
+		? TypeOrmCrudSelectedProperty<Entity[Field], Exclude<Selection[Field], false | undefined>>
+		: never;
+};
+
+/** Record returned by an unselected, literal-selected, or widened-selection adapter. */
+export type TypeOrmCrudRecord<
+	Entity extends ObjectLiteral,
+	Selection extends FindOptionsSelect<Entity> | undefined,
+> = Selection extends undefined
+	? Entity
+	: FindOptionsSelect<Entity> extends Selection
+		? DeepPartial<Entity>
+		: Selection extends object
+			? TypeOrmCrudSelectedRecord<Entity, Selection>
+			: never;
 
 /** The alias every generated statement selects the resource's rows under. */
 export const TYPEORM_CRUD_ALIAS = "crud_record";
@@ -91,6 +153,14 @@ export interface TypeOrmCrudAdapterOptions<RecordType extends ObjectLiteral> {
 	readonly repository: Repository<RecordType>;
 	/** Maps public logical field names to TypeORM entity property paths. */
 	readonly columns: Readonly<Record<string, string>>;
+	/**
+	 * TypeORM-native scalar column selection used for every hydrated record.
+	 *
+	 * Omit this to preserve full-entity hydration. When present, every primary
+	 * column must be selected. Mutations use primitive DML with a narrow
+	 * `RETURNING` list so TypeORM cannot issue an implicit full-entity reload.
+	 */
+	readonly select?: FindOptionsSelect<RecordType>;
 	/** Wraps standalone work in an application-owned transaction, for example a tenant RLS executor. */
 	readonly transactionRunner?: TypeOrmCrudTransactionRunner;
 	/** Adds a native, fail-closed SQL predicate to every read, update, and delete statement. */
@@ -163,6 +233,103 @@ function getProperty(record: object, path: string): unknown {
 	return value;
 }
 
+function flattenTypeOrmSelection(
+	selection: Readonly<Record<string, unknown>>,
+	prefix = "",
+): string[] {
+	const fields: string[] = [];
+	for (const [field, value] of Object.entries(selection)) {
+		const propertyPath = prefix === "" ? field : `${prefix}.${field}`;
+		if (value === true) {
+			fields.push(propertyPath);
+			continue;
+		}
+		if (value === false || value === undefined) continue;
+		if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+			const nested = flattenTypeOrmSelection(
+				value as Readonly<Record<string, unknown>>,
+				propertyPath,
+			);
+			if (nested.length === 0) {
+				throw new TypeError(
+					`TypeORM CRUD select field '${propertyPath}' must include at least one scalar column.`,
+				);
+			}
+			fields.push(...nested);
+			continue;
+		}
+		throw new TypeError(`TypeORM CRUD select field '${propertyPath}' must be true or nested.`);
+	}
+	return fields;
+}
+
+function setProperty(record: Record<string, unknown>, path: string, value: unknown): void {
+	const parts = path.split(".");
+	let target = record;
+	for (const part of parts.slice(0, -1)) {
+		const existing = target[part];
+		if (existing !== null && typeof existing === "object" && !Array.isArray(existing)) {
+			target = existing as Record<string, unknown>;
+		} else {
+			const nested: Record<string, unknown> = {};
+			target[part] = nested;
+			target = nested;
+		}
+	}
+	const leaf = parts.at(-1);
+	if (leaf !== undefined) target[leaf] = value;
+}
+
+function normalizeSelectedUpdateValues(
+	metadata: EntityMetadata,
+	values: Readonly<Record<string, unknown>>,
+	prefix = "",
+): Record<string, unknown> {
+	const normalized: Record<string, unknown> = {};
+	for (const [field, value] of Object.entries(values)) {
+		if (value === undefined) continue;
+		const propertyPath = prefix === "" ? field : `${prefix}.${field}`;
+		const column = metadata.findColumnWithPropertyPathStrict(propertyPath);
+		if (column !== undefined) {
+			if (column.isUpdate) normalized[field] = value;
+			continue;
+		}
+		const embedded = metadata.findEmbeddedWithPropertyPath(propertyPath);
+		if (embedded !== undefined && value === null) {
+			const embeddedValues: Record<string, unknown> = {};
+			for (const embeddedColumn of embedded.columnsFromTree) {
+				if (!embeddedColumn.isUpdate) continue;
+				setProperty(
+					embeddedValues,
+					embeddedColumn.propertyPath.slice(propertyPath.length + 1),
+					null,
+				);
+			}
+			if (Object.keys(embeddedValues).length > 0) normalized[field] = embeddedValues;
+			continue;
+		}
+		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+			const nested = normalizeSelectedUpdateValues(
+				metadata,
+				value as Readonly<Record<string, unknown>>,
+				propertyPath,
+			);
+			if (Object.keys(nested).length > 0) {
+				normalized[field] = nested;
+			} else if (embedded === undefined) {
+				// Preserve unknown and relation objects for TypeORM to validate instead
+				// of silently turning malformed runtime input into a no-op.
+				normalized[field] = value;
+			}
+			continue;
+		}
+		// Let TypeORM validate relation and unknown runtime inputs. They are not
+		// silently reclassified as a no-op by the adapter.
+		normalized[field] = value;
+	}
+	return normalized;
+}
+
 function transactionRequirements(
 	context: CrudAdapterContext,
 	rowPredicateIsolationLevel?: TypeOrmCrudTransactionIsolationLevel,
@@ -225,11 +392,10 @@ function resolveEffectiveTransaction(
 	return Object.freeze({ ...effective });
 }
 
-export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements CrudAdapter<
-	RecordType,
-	DeepPartial<RecordType>,
-	DeepPartial<RecordType>
-> {
+export class TypeOrmCrudAdapter<
+	EntityType extends ObjectLiteral,
+	RecordType extends ObjectLiteral = EntityType,
+> implements CrudAdapter<RecordType, DeepPartial<EntityType>, DeepPartial<EntityType>> {
 	readonly capabilities = Object.freeze({
 		transactions: true,
 		returning: true,
@@ -237,26 +403,49 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 		containsInsensitive: true,
 	});
 
-	readonly #repository: Repository<RecordType>;
+	readonly #repository: Repository<EntityType>;
 	readonly #columns: Readonly<Record<string, string>>;
+	readonly #selectedPropertyPaths: readonly string[] | undefined;
 	readonly #transactionRunner: TypeOrmCrudTransactionRunner | undefined;
-	readonly #rowPredicate: TypeOrmCrudRowPredicate<RecordType> | undefined;
+	readonly #rowPredicate: TypeOrmCrudRowPredicate<EntityType> | undefined;
 	readonly #rowPredicateIsolationLevel: TypeOrmCrudTransactionIsolationLevel | undefined;
 	readonly #sessionMarker = Symbol("@nestm/crud-typeorm:session");
 	readonly #activeSessions = new WeakSet<object>();
 
-	constructor(options: TypeOrmCrudAdapterOptions<RecordType>) {
-		this.#repository = options.repository;
-		this.#columns = Object.freeze({ ...options.columns });
-		this.#transactionRunner = options.transactionRunner;
+	constructor(
+		options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select"> & {
+			readonly select?: undefined;
+		},
+	);
+	constructor(options: unknown) {
+		const adapterOptions = options as TypeOrmCrudAdapterOptions<EntityType>;
+		this.#repository = adapterOptions.repository;
+		this.#columns = Object.freeze({ ...adapterOptions.columns });
+		this.#selectedPropertyPaths = this.#resolveSelection(adapterOptions.select);
+		if (
+			this.#selectedPropertyPaths !== undefined &&
+			this.#repository.metadata.treeType !== undefined
+		) {
+			throw new TypeError("TypeORM CRUD selected records do not support tree entities.");
+		}
+		if (
+			this.#selectedPropertyPaths !== undefined &&
+			this.#repository.metadata.inheritancePattern === "STI" &&
+			this.#repository.metadata.childEntityMetadatas.length > 0
+		) {
+			throw new TypeError(
+				"TypeORM CRUD selected records do not support base single-table inheritance repositories.",
+			);
+		}
+		this.#transactionRunner = adapterOptions.transactionRunner;
 		this.#rowPredicate =
-			typeof options.rowPredicate === "function"
-				? options.rowPredicate
-				: options.rowPredicate?.resolve;
+			typeof adapterOptions.rowPredicate === "function"
+				? adapterOptions.rowPredicate
+				: adapterOptions.rowPredicate?.resolve;
 		this.#rowPredicateIsolationLevel =
-			typeof options.rowPredicate === "function"
+			typeof adapterOptions.rowPredicate === "function"
 				? undefined
-				: options.rowPredicate?.transaction?.isolationLevel;
+				: adapterOptions.rowPredicate?.transaction?.isolationLevel;
 		for (const [field, propertyPath] of Object.entries(this.#columns)) {
 			if (!this.#repository.metadata.findColumnWithPropertyPath(propertyPath)) {
 				throw new TypeError(
@@ -285,7 +474,7 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 	}
 
 	async create(
-		input: CrudCreateInput<DeepPartial<RecordType>>,
+		input: CrudCreateInput<DeepPartial<EntityType>>,
 		context: CrudAdapterContext,
 	): Promise<RecordType> {
 		try {
@@ -294,8 +483,20 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 				{ accessMode: "read write", isolationLevel: "read committed", mustOwnCommit: true },
 				false,
 				async (repository) => {
+					if (this.#selectedPropertyPaths !== undefined) {
+						const entity = repository.create(input.values);
+						const result = await repository
+							.createQueryBuilder()
+							.insert()
+							.into(repository.target)
+							.values(entity as QueryDeepPartialEntity<EntityType>)
+							.updateEntity(false)
+							.returning([...this.#selectedPropertyPaths])
+							.execute();
+						return this.#hydrateReturning(repository, result.raw[0]);
+					}
 					const entity = repository.create(input.values);
-					return await repository.save(entity);
+					return (await repository.save(entity)) as unknown as RecordType;
 				},
 			);
 		} catch (error) {
@@ -348,9 +549,9 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 					query.skip(input.offset ?? 0).take(input.limit);
 					if (input.count) {
 						const [records, total] = await query.getManyAndCount();
-						return { records, total };
+						return { records: records as unknown as RecordType[], total };
 					}
-					return { records: await query.getMany() };
+					return { records: (await query.getMany()) as unknown as RecordType[] };
 				},
 			);
 		} catch (error) {
@@ -359,7 +560,7 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 	}
 
 	async update(
-		input: CrudUpdateInput<DeepPartial<RecordType>>,
+		input: CrudUpdateInput<DeepPartial<EntityType>>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null> {
 		try {
@@ -379,8 +580,31 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 						true,
 					);
 					if (record === null) return null;
-					repository.merge(record, input.values);
-					return await repository.save(record);
+					if (this.#selectedPropertyPaths !== undefined) {
+						const values = normalizeSelectedUpdateValues(
+							repository.metadata,
+							input.values as Readonly<Record<string, unknown>>,
+						);
+						if (Object.keys(values).length === 0) return record;
+						const mutation = await this.#selectedMutation(
+							repository,
+							record,
+							input.predicate,
+							activeContext,
+						);
+						const result = await mutation
+							.update()
+							.set(values as QueryDeepPartialEntity<EntityType>)
+							.updateEntity(false)
+							.returning([...this.#selectedPropertyPaths])
+							.execute();
+						return result.raw.length === 0
+							? null
+							: this.#hydrateReturning(repository, result.raw[0]);
+					}
+					const entity = record as unknown as EntityType;
+					repository.merge(entity, input.values);
+					return (await repository.save(entity)) as unknown as RecordType;
 				},
 			);
 		} catch (error) {
@@ -406,9 +630,25 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 						true,
 					);
 					if (record === null) return null;
-					const previous = repository.create(record as DeepPartial<RecordType>);
-					await repository.remove(record);
-					return previous;
+					if (this.#selectedPropertyPaths !== undefined) {
+						const mutation = await this.#selectedMutation(
+							repository,
+							record,
+							input.predicate,
+							activeContext,
+						);
+						const result = await mutation
+							.delete()
+							.returning([...this.#selectedPropertyPaths])
+							.execute();
+						return result.raw.length === 0
+							? null
+							: this.#hydrateReturning(repository, result.raw[0]);
+					}
+					const entity = record as unknown as EntityType;
+					const previous = repository.create(entity as DeepPartial<EntityType>);
+					await repository.remove(entity);
+					return previous as unknown as RecordType;
 				},
 			);
 		} catch (error) {
@@ -417,7 +657,17 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 	}
 
 	getField(record: RecordType, field: string): unknown {
-		return getProperty(record, this.#property(field));
+		const propertyPath = this.#property(field);
+		if (
+			this.#selectedPropertyPaths !== undefined &&
+			!this.#selectedPropertyPaths.includes(propertyPath)
+		) {
+			throw new CrudAdapterError(
+				"unsupported",
+				`The TypeORM adapter did not select CRUD field '${field}'.`,
+			);
+		}
+		return getProperty(record, propertyPath);
 	}
 
 	/**
@@ -433,7 +683,7 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 		requirements: TypeOrmCrudTransactionRequirements,
 		forceTransaction: boolean,
 		work: (
-			repository: Repository<RecordType>,
+			repository: Repository<EntityType>,
 			activeContext: CrudAdapterContext,
 		) => Promise<Result>,
 	): Promise<Result> {
@@ -555,7 +805,7 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 		}
 	}
 
-	#repositoryFrom(manager: EntityManager): Repository<RecordType> {
+	#repositoryFrom(manager: EntityManager): Repository<EntityType> {
 		return manager.getRepository(this.#repository.target);
 	}
 
@@ -574,12 +824,105 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 		return session.value as TypeOrmSessionState;
 	}
 
-	#query(repository: Repository<RecordType>): SelectQueryBuilder<RecordType> {
-		return repository.createQueryBuilder(TYPEORM_CRUD_ALIAS);
+	#query(repository: Repository<EntityType>): SelectQueryBuilder<EntityType> {
+		const query = repository.createQueryBuilder(TYPEORM_CRUD_ALIAS);
+		if (this.#selectedPropertyPaths !== undefined) {
+			query.select(
+				this.#selectedPropertyPaths.map((propertyPath) => `${query.alias}.${propertyPath}`),
+			);
+		}
+		return query;
+	}
+
+	#resolveSelection(
+		selection: FindOptionsSelect<EntityType> | undefined,
+	): readonly string[] | undefined {
+		if (selection === undefined) return undefined;
+		const propertyPaths = flattenTypeOrmSelection(selection);
+		if (propertyPaths.length === 0) {
+			throw new TypeError("TypeORM CRUD select must include at least one scalar column.");
+		}
+		for (const propertyPath of propertyPaths) {
+			const column = this.#repository.metadata.findColumnWithPropertyPathStrict(propertyPath);
+			if (column === undefined || column.isVirtual || column.isVirtualProperty) {
+				throw new TypeError(
+					`TypeORM CRUD select references unknown scalar property '${propertyPath}'.`,
+				);
+			}
+		}
+		for (const primary of this.#repository.metadata.primaryColumns) {
+			if (!propertyPaths.includes(primary.propertyPath)) {
+				throw new TypeError(
+					`TypeORM CRUD select must include primary property '${primary.propertyPath}'.`,
+				);
+			}
+		}
+		return Object.freeze(propertyPaths);
+	}
+
+	async #selectedMutation(
+		repository: Repository<EntityType>,
+		record: RecordType,
+		predicate: CrudFindOneInput["predicate"],
+		context: CrudAdapterContext,
+	): Promise<SelectQueryBuilder<EntityType>> {
+		const identity = repository.metadata.getEntityIdMap(record);
+		if (identity === undefined) {
+			throw new CrudAdapterError(
+				"unknown",
+				"The selected TypeORM record did not contain its complete identity.",
+			);
+		}
+
+		const selector = repository.createQueryBuilder(TYPEORM_CRUD_ALIAS);
+		selector.select(
+			repository.metadata.primaryColumns.map(
+				(column) => `${selector.alias}.${column.propertyPath}`,
+			),
+		);
+		await this.#where(selector, predicate, context);
+		// Bind identity last so TypeORM allocates its automatic parameter names
+		// around every explicit native/CRUD name already present on the builder.
+		selector.andWhereInIds(identity).limit(1);
+
+		const mutation = repository.createQueryBuilder();
+		const targetColumns = repository.metadata.primaryColumns.map((column) =>
+			mutation.escape(column.databaseName),
+		);
+		const target = targetColumns.length === 1 ? targetColumns[0]! : `(${targetColumns.join(", ")})`;
+		return mutation.where(`${target} IN (${selector.getQuery()})`, selector.getParameters());
+	}
+
+	#hydrateReturning(repository: Repository<EntityType>, raw: unknown): RecordType {
+		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+			throw new CrudAdapterError(
+				"unknown",
+				"TypeORM did not return the selected columns for the CRUD mutation.",
+			);
+		}
+		const values = raw as Readonly<Record<string, unknown>>;
+		const record = repository.metadata.create(repository.queryRunner, { fromDeserializer: true });
+		for (const propertyPath of this.#selectedPropertyPaths ?? []) {
+			const column = repository.metadata.findColumnWithPropertyPathStrict(propertyPath);
+			if (column === undefined || !Object.hasOwn(values, column.databaseName)) {
+				throw new CrudAdapterError(
+					"unknown",
+					`TypeORM omitted selected property '${propertyPath}' from the CRUD mutation result.`,
+				);
+			}
+			column.setEntityValue(
+				record,
+				repository.manager.connection.driver.prepareHydratedValue(
+					values[column.databaseName],
+					column,
+				),
+			);
+		}
+		return record as RecordType;
 	}
 
 	async #findOne(
-		repository: Repository<RecordType>,
+		repository: Repository<EntityType>,
 		input: CrudFindOneInput,
 		context: CrudAdapterContext,
 		lock = false,
@@ -593,7 +936,7 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 			);
 		}
 		if (lock && context.session) query.setLock("pessimistic_write");
-		return await query.getOne();
+		return (await query.getOne()) as RecordType | null;
 	}
 
 	/**
@@ -604,32 +947,43 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 	 * statement that quietly stops being constrained.
 	 */
 	async #where(
-		query: SelectQueryBuilder<RecordType>,
+		query: SelectQueryBuilder<EntityType>,
 		predicate: CrudFindOneInput["predicate"] | undefined,
 		context: CrudAdapterContext,
 	): Promise<void> {
-		if (predicate !== undefined) {
-			const compiled = compileTypeOrmPredicate(predicate, (field) =>
-				this.#fieldExpression(query, field),
-			);
-			query.andWhere(compiled.sql, compiled.parameters);
+		const compiled =
+			predicate === undefined
+				? undefined
+				: compileTypeOrmPredicate(predicate, (field) => this.#fieldExpression(query, field));
+		let nativeParameters: Readonly<Record<string, unknown>> | undefined;
+		if (this.#rowPredicate !== undefined) {
+			const nativePredicate = await this.#rowPredicate({
+				repository: this.#repository,
+				alias: query.alias,
+				context,
+			});
+			if (!(nativePredicate instanceof Brackets)) {
+				throw new CrudAdapterError(
+					"unknown",
+					"The configured TypeORM row predicate did not return a Brackets expression.",
+				);
+			}
+			query.andWhere(nativePredicate);
+			nativeParameters = query.getParameters();
 		}
-		if (this.#rowPredicate === undefined) return;
-		const nativePredicate = await this.#rowPredicate({
-			repository: this.#repository,
-			alias: query.alias,
-			context,
-		});
-		if (!(nativePredicate instanceof Brackets)) {
-			throw new CrudAdapterError(
-				"unknown",
-				"The configured TypeORM row predicate did not return a Brackets expression.",
-			);
+		if (compiled === undefined) return;
+		for (const parameter of Object.keys(compiled.parameters)) {
+			if (nativeParameters !== undefined && Object.hasOwn(nativeParameters, parameter)) {
+				throw new CrudAdapterError(
+					"unknown",
+					`The TypeORM row predicate collides with reserved CRUD parameter '${parameter}'.`,
+				);
+			}
 		}
-		query.andWhere(nativePredicate);
+		query.andWhere(compiled.sql, compiled.parameters);
 	}
 
-	#fieldExpression(query: SelectQueryBuilder<RecordType>, field: string): string {
+	#fieldExpression(query: SelectQueryBuilder<EntityType>, field: string): string {
 		return `${query.alias}.${this.#property(field)}`;
 	}
 
@@ -645,8 +999,24 @@ export class TypeOrmCrudAdapter<RecordType extends ObjectLiteral> implements Cru
 	}
 }
 
-export function createTypeOrmCrudAdapter<RecordType extends ObjectLiteral>(
-	options: TypeOrmCrudAdapterOptions<RecordType>,
-): TypeOrmCrudAdapter<RecordType> {
-	return new TypeOrmCrudAdapter(options);
+export function createTypeOrmCrudAdapter<EntityType extends ObjectLiteral>(
+	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select"> & { readonly select?: undefined },
+): TypeOrmCrudAdapter<EntityType>;
+export function createTypeOrmCrudAdapter<
+	EntityType extends ObjectLiteral,
+	const Selection extends FindOptionsSelect<EntityType> = FindOptionsSelect<EntityType>,
+>(
+	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select"> & { readonly select: Selection },
+): TypeOrmCrudAdapter<EntityType, TypeOrmCrudSelectedRecord<EntityType, Selection>>;
+export function createTypeOrmCrudAdapter<EntityType extends ObjectLiteral>(
+	options: TypeOrmCrudAdapterOptions<EntityType>,
+): TypeOrmCrudAdapter<EntityType, TypeOrmCrudRecord<EntityType, FindOptionsSelect<EntityType>>>;
+export function createTypeOrmCrudAdapter(options: unknown): unknown {
+	const AdapterConstructor = TypeOrmCrudAdapter as unknown as new <
+		EntityType extends ObjectLiteral,
+		RecordType extends ObjectLiteral = EntityType,
+	>(
+		options: TypeOrmCrudAdapterOptions<EntityType>,
+	) => TypeOrmCrudAdapter<EntityType, RecordType>;
+	return new AdapterConstructor(options as TypeOrmCrudAdapterOptions<ObjectLiteral>);
 }

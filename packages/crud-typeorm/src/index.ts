@@ -13,6 +13,8 @@ export {
 	type TypeOrmCrudRowPredicate,
 	type TypeOrmCrudRowPredicateContext,
 	type TypeOrmCrudRowPredicateOptions,
+	type TypeOrmCrudRecord,
+	type TypeOrmCrudSelectedRecord,
 	type TypeOrmCrudTransactionAccessMode,
 	type TypeOrmCrudTransactionIsolationLevel,
 	type TypeOrmCrudTransactionRequirements,

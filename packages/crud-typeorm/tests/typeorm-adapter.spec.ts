@@ -92,6 +92,9 @@ function createFakeRepository(
 			capture.whereArgs.push(args);
 			return builder;
 		},
+		getParameters() {
+			return {};
+		},
 		addOrderBy(field: string, direction: string) {
 			capture.orderArgs.push([field, direction]);
 			return builder;
@@ -390,7 +393,8 @@ describe("TypeOrmCrudAdapter row predicate", () => {
 		);
 		expect(rowPredicate.mock.calls.every(([value]) => value.repository === repository)).toBe(true);
 
-		// Two andWhere calls per statement: the compiled CRUD predicate, then the native one.
+		// Two andWhere calls per statement: native first so its named parameters can be
+		// checked for collisions, then the compiled CRUD predicate.
 		const bracketCalls = capture.whereArgs.filter(([first]) => first instanceof Brackets);
 		expect(bracketCalls).toHaveLength(4);
 		expect(capture.whereArgs).toHaveLength(8);
