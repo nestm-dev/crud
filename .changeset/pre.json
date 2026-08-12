@@ -14,6 +14,7 @@
 		"headless-crud-features",
 		"initial-crud-alpha",
 		"swagger-filter-builder",
-		"typeorm-scoped-transactions"
+		"typeorm-scoped-transactions",
+		"typeorm-selected-records"
 	]
 }
