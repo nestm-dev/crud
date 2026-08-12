@@ -74,6 +74,11 @@ or explicitly annotate it with
 `CrudCreateMappingValues<DocumentInsert, "organizationId" | "ownerId">` from
 `@nestm/crud/adapter`.
 
+The Drizzle adapter does not yet advertise the core atomic-upsert capability.
+Although `bindDrizzleCrud` forwards generic binding metadata for custom capable
+adapters, the bundled adapter rejects resources that enable `upsert` until its
+PostgreSQL conflict-update authorization path is certified.
+
 ## Application-owned transactions and native row policy
 
 Use `transactionRunner` when every standalone CRUD statement must execute in an

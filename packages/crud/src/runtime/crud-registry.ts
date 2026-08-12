@@ -3,6 +3,7 @@ import {
 	Optional,
 	StandardSchemaSerializerInterceptor,
 	StandardSchemaValidationPipe,
+	type ExecutionContext,
 	type OnApplicationBootstrap,
 } from "@nestjs/common";
 import { ApplicationConfig } from "@nestjs/core";
@@ -11,12 +12,32 @@ import type { CrudResourceBinding } from "../adapter/binding.types.ts";
 import type { AnyCrudResource } from "../resource/resource.types.ts";
 import type { CrudOperationName } from "../resource/operations.ts";
 import { isCrudResource } from "../resource/define-resource.ts";
-import type { CrudService } from "./crud.service.ts";
+
+interface ErasedRelationReadOptions {
+	readonly fields: readonly string[];
+	readonly tuples: readonly (readonly unknown[])[];
+	readonly executionContext?: ExecutionContext;
+	readonly limit: number;
+}
+
+interface CrudRelationService {
+	readonly adapter: { getField(record: unknown, field: string): unknown };
+	findForRelation(options: ErasedRelationReadOptions): Promise<readonly unknown[]>;
+	projectForRelation(
+		records: readonly unknown[],
+		executionContext?: ExecutionContext,
+	): Promise<ReadonlyMap<unknown, Readonly<Record<string, unknown>>>>;
+	mapRecordForRelation(
+		record: unknown,
+		executionContext?: ExecutionContext,
+		projected?: Readonly<Record<string, unknown>>,
+	): Promise<unknown>;
+}
 
 interface CrudRegistryEntry {
 	readonly binding: CrudResourceBinding;
 	readonly resource: AnyCrudResource;
-	readonly service: CrudService;
+	readonly service: CrudRelationService;
 }
 
 const ROUTES: Readonly<Record<CrudOperationName, readonly [string, string]>> = {
@@ -26,6 +47,7 @@ const ROUTES: Readonly<Record<CrudOperationName, readonly [string, string]>> = {
 	update: ["PATCH", "item"],
 	delete: ["DELETE", "item"],
 	restore: ["POST", "restore"],
+	upsert: ["PUT", "item"],
 };
 
 @Injectable()
@@ -38,7 +60,7 @@ export class CrudRegistry implements OnApplicationBootstrap {
 
 	register(
 		binding: CrudResourceBinding,
-		service: CrudService,
+		service: CrudRelationService,
 		registerGeneratedController = true,
 	): void {
 		const { resource } = binding;
@@ -63,6 +85,16 @@ export class CrudRegistry implements OnApplicationBootstrap {
 				if (targetEntry === undefined) {
 					throw new TypeError(
 						`CRUD relation "${resource.name}.${name}" targets unregistered resource "${target.name}".`,
+					);
+				}
+				if (targetEntry.resource.pathParams !== undefined) {
+					throw new TypeError(
+						`CRUD relation "${resource.name}.${name}" cannot target nested resource "${target.name}".`,
+					);
+				}
+				if (targetEntry.resource !== target) {
+					throw new TypeError(
+						`CRUD relation "${resource.name}.${name}" must return the exact registered resource "${target.name}".`,
 					);
 				}
 				for (const field of relation.local) {
@@ -92,7 +124,13 @@ export class CrudRegistry implements OnApplicationBootstrap {
 	}
 
 	getResource(resource: AnyCrudResource): CrudRegistryEntry {
-		return this.get(resource.name);
+		const entry = this.get(resource.name);
+		if (entry.resource !== resource) {
+			throw new TypeError(
+				`CRUD resource "${resource.name}" does not match the exact registered resource identity.`,
+			);
+		}
+		return entry;
 	}
 
 	list(): readonly CrudRegistryEntry[] {

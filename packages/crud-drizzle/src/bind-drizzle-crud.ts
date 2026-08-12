@@ -1,6 +1,7 @@
 import {
 	defineCrudBinding,
 	type CrudAdapterProvider,
+	type CrudBindingUpsertOptions,
 	type CrudBindingMappings,
 	type CompleteCrudFieldSelection,
 	type CrudScopeCreateField,
@@ -36,6 +37,8 @@ interface BindDrizzleCrudOptionsBase<
 	>;
 	/** Insert fields supplied by CRUD scopes through `mappings.scopeCreate`. */
 	readonly scopeCreateFields?: ScopeCreateFields;
+	/** Atomic-upsert persistence fields. The configured adapter must advertise that capability. */
+	readonly upsert?: CrudBindingUpsertOptions;
 	/** Standard Nest provider form for an adapter; injected databases remain application-owned. */
 	readonly adapter: DrizzleCrudAdapterProvider<RecordType, CreateValues, UpdateValues>;
 }

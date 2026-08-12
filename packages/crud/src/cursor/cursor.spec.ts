@@ -75,6 +75,103 @@ describe("HmacSha256CrudCursorCodec", () => {
 		).rejects.toMatchObject({ code: "binding_mismatch" });
 	});
 
+	it("binds a cursor to fixed nested collection values", async () => {
+		const codec = new HmacSha256CrudCursorCodec(SECRET);
+		const order = [
+			{ field: "rank", direction: "asc" },
+			{ field: "artifactId", direction: "asc" },
+			{ field: "id", direction: "asc" },
+		] as const;
+		const values = [10, "artifact-a", 7] as const;
+		const binding = {
+			resource: "artifact-versions",
+			order,
+			fixed: [{ field: "artifactId", value: "artifact-a" }],
+		} as const;
+		const token = await encodeCrudCursor(codec, binding, values);
+
+		await expect(decodeCrudCursor(codec, token, binding)).resolves.toMatchObject({ values });
+		await expect(
+			decodeCrudCursor(codec, token, {
+				...binding,
+				fixed: [{ field: "artifactId", value: "artifact-b" }],
+			}),
+		).rejects.toMatchObject({ code: "binding_mismatch" });
+		await expect(
+			encodeCrudCursor(
+				codec,
+				{
+					...binding,
+					fixed: [{ field: "artifactId", value: "artifact-b" }],
+				},
+				values,
+			),
+		).rejects.toMatchObject({ code: "binding_mismatch" });
+	});
+
+	it("compares fixed cursor values losslessly", async () => {
+		const codec = new HmacSha256CrudCursorCodec(SECRET);
+		const order = [{ field: "parent", direction: "asc" }] as const;
+		const parent = {
+			createdAt: new Date("2026-08-01T12:00:00.000Z"),
+			key: Uint8Array.from([1, 2, 255]),
+			sequence: 42n,
+			labels: ["a", null],
+		};
+		const token = await encodeCrudCursor(
+			codec,
+			{ resource: "nested", order, fixed: [{ field: "parent", value: parent }] },
+			[parent],
+		);
+
+		await expect(
+			decodeCrudCursor(codec, token, {
+				resource: "nested",
+				order,
+				fixed: [
+					{
+						field: "parent",
+						value: {
+							labels: ["a", null],
+							sequence: 42n,
+							key: Uint8Array.from([1, 2, 255]),
+							createdAt: new Date("2026-08-01T12:00:00.000Z"),
+						},
+					},
+				],
+			}),
+		).resolves.toMatchObject({ values: [parent] });
+	});
+
+	it("rejects fixed fields missing from or duplicated in the cursor order", async () => {
+		const codec = new HmacSha256CrudCursorCodec(SECRET);
+		await expect(
+			encodeCrudCursor(
+				codec,
+				{
+					resource: "nested",
+					order: [{ field: "id", direction: "asc" }],
+					fixed: [{ field: "parentId", value: 1 }],
+				},
+				[1],
+			),
+		).rejects.toMatchObject({ code: "binding_mismatch" });
+		await expect(
+			encodeCrudCursor(
+				codec,
+				{
+					resource: "nested",
+					order: [
+						{ field: "parentId", direction: "asc" },
+						{ field: "parentId", direction: "desc" },
+					],
+					fixed: [{ field: "parentId", value: 1 }],
+				},
+				[1, 1],
+			),
+		).rejects.toMatchObject({ code: "binding_mismatch" });
+	});
+
 	it("rejects cyclic or non-finite cursor values", () => {
 		const codec = new HmacSha256CrudCursorCodec(SECRET);
 		const order = [{ field: "id", direction: "asc" }] as const;

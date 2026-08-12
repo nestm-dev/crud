@@ -124,6 +124,21 @@ const resource = defineCrudResource({
 	operations: crudOperations.all(),
 });
 
+const upsertResource = defineCrudResource({
+	name: "typeorm-user-upserts",
+	path: "typeorm-user-upserts",
+	itemPath: ":id",
+	idFields: { id: "id" },
+	contracts: {
+		id: z.object({ id: z.coerce.number().int() }),
+		create: z.object({ name: z.string() }),
+		update: z.object({ name: z.string().optional() }),
+		upsert: z.object({ name: z.string() }),
+		response: z.object({ id: z.number().int(), name: z.string() }),
+	},
+	operations: crudOperations.only("upsert"),
+});
+
 const fields = ["id", "name", "tenantId"] as const;
 
 const selectedBinding = bindTypeOrmCrud({
@@ -194,6 +209,25 @@ const scopedBinding = bindTypeOrmCrud({
 	},
 });
 
+const upsertBinding = bindTypeOrmCrud({
+	resource: upsertResource,
+	adapter: { useValue: adapter },
+	fields,
+	scopeCreateFields: ["tenantId"],
+	upsert: {
+		conflictFields: ["id"],
+		overwriteFields: ["name"],
+	},
+	mappings: {
+		create: (input) => ({ name: input.name }),
+		update: (input) => (input.name === undefined ? {} : { name: input.name }),
+		upsert: (id, input) => ({ id: id.id, name: input.name }),
+		scopeCreate: (values) => ({ tenantId: values.tenantId as string }),
+		persistence: () => ({}),
+		response: (record) => ({ id: record.id, name: record.name }),
+	},
+});
+
 type InvalidScopeCreateField = BindTypeOrmCrudOptions<
 	typeof resource,
 	UserEntity,
@@ -206,5 +240,6 @@ void binding;
 void selectedBinding;
 void invalidOptions;
 void scopedBinding;
+void upsertBinding;
 declare const invalidScopeCreateField: InvalidScopeCreateField;
 void invalidScopeCreateField;

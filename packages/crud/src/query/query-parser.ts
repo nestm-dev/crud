@@ -75,6 +75,7 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 			const cursor = await decodeCrudCursor(options.cursorCodec, pagination.after, {
 				resource: resource.name,
 				order,
+				...(options.cursorFixedValues === undefined ? {} : { fixed: options.cursorFixedValues }),
 			});
 			cursorPredicate = buildCrudCursorPredicate(order, cursor.values);
 		} catch (cause) {

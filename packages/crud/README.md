@@ -36,8 +36,9 @@ service providers, imports, and service exports while generating no controllers.
 
 - `operations` is mandatory. Use `crudOperations.all()`, `readOnly()`, or
   `only(...)`; explicitly add `restore` when soft deletion is configured.
-- The ID schema must output a required object whose keys exactly match
-  `itemPath` parameters and `idFields`. Single and composite IDs are supported.
+- The ID schema must output a required object whose keys exactly match the full
+  `path + itemPath` parameters and `idFields`. Single, composite, and nested
+  resource IDs are supported. Nested collection parameters use `pathParams`.
 - With no pagination config, list uses offset mode. `{ cursor: true }` is
   cursor-only; set `{ offset: true, cursor: true }` to enable both.
 - Cursor sort fields must be non-nullable. All ID fields are appended as stable
@@ -54,11 +55,14 @@ service providers, imports, and service exports while generating no controllers.
   with distinct `updateValues`. Before/after mutation hooks run in the
   transaction; `afterCommit` failures go to the configured error sink.
 - Binding `scopeCreateFields` declares adapter insert fields supplied by scopes
-  through `mappings.scopeCreate`. Only declared fields may be omitted by
+  or nested paths through `mappings.scopeCreate`. Only declared fields may be omitted by
   `mappings.create`; missing declared values fail closed before adapter create.
 - `enhancers.decorators` carries opaque Nest class decorators at resource level
   and method decorators at operation or `queryDeletedEnhancers` level. This lets
   integrations attach authorization metadata without coupling CRUD to them.
+- Atomic upsert is opt-in and requires a capable adapter plus explicit
+  persistence `conflictFields` and `overwriteFields`. It performs no pre-read;
+  TypeORM/PostgreSQL is the currently certified bundled implementation.
 
 Invalid inputs, queries, and cursors map to `400`, scope-hidden and absent rows
 to `404`, unique conflicts to `409`, over-bound includes to `422`, and sanitized
@@ -96,7 +100,7 @@ NestJS 12 prerelease line. `createCrudAdapterConformanceCases` and
 `runCrudAdapterConformance` help adapter authors certify the shared contract;
 `InsecureCrudCursorCodec` must never be used outside tests.
 
-The alpha intentionally defers batch/upsert/nested writes, optimistic
+The alpha intentionally defers batch/bulk writes, optimistic
 concurrency, aggregates/full-text search, sparse fieldsets, import/export,
 audit/version history, GraphQL, microservices, and schematics. The broader
 [hono-crud feature set](https://github.com/kshdotdev/hono-crud/blob/80de807d7c18691b7ddedf6ccca6db47b5cb1b57/README.md#features)

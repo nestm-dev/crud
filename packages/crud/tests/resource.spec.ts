@@ -49,6 +49,37 @@ describe("defineCrudResource", () => {
 		expect(Object.isFrozen(resource.query?.filters?.name?.operators)).toBe(true);
 	});
 
+	it("snapshots and freezes nested path parameter configuration", () => {
+		const resource = defineCrudResource({
+			name: "artifact-versions",
+			path: "artifacts/:artifactId/versions",
+			itemPath: ":versionId",
+			idFields: { artifactId: "artifactId", versionId: "versionId" },
+			pathParams: {
+				contract: { schema: z.object({ artifactId: z.string().uuid() }) },
+				fields: { artifactId: "artifactId" },
+			},
+			contracts: {
+				id: z.object({ artifactId: z.string().uuid(), versionId: z.coerce.number().int() }),
+				create: z.object({ name: z.string() }),
+				update: z.object({ name: z.string().optional() }),
+				upsert: { schema: z.object({ name: z.string() }) },
+				response: z.object({
+					artifactId: z.string().uuid(),
+					versionId: z.number().int(),
+					name: z.string(),
+				}),
+			},
+			operations: crudOperations.readOnly(),
+		});
+
+		expect(resource.pathParams?.fields).toEqual({ artifactId: "artifactId" });
+		expect(Object.isFrozen(resource.pathParams)).toBe(true);
+		expect(Object.isFrozen(resource.pathParams?.fields)).toBe(true);
+		expect(Object.isFrozen(resource.pathParams?.contract)).toBe(true);
+		expect(Object.isFrozen(resource.contracts.upsert)).toBe(true);
+	});
+
 	it("snapshots decorator enhancer arrays at every supported level", () => {
 		const noopDecorator: ClassDecorator & MethodDecorator = () => undefined;
 		const resourceDecorators: (ClassDecorator | MethodDecorator)[] = [noopDecorator];
@@ -106,13 +137,112 @@ describe("defineCrudResource", () => {
 
 	it.each([
 		[
-			"route parameters in the collection path",
+			"route parameters in the collection path without pathParams",
 			() =>
 				defineCrudResource({
 					...validDefinition(),
 					path: "tenants/:tenantId/widgets",
-				}),
-			"path cannot contain route parameters",
+				} as CrudResourceDefinition),
+			"must declare pathParams",
+		],
+		[
+			"pathParams on a flat collection path",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					pathParams: {
+						contract: z.object({ tenantId: z.string() }),
+						fields: { tenantId: "tenantId" },
+					},
+				} as CrudResourceDefinition),
+			"cannot declare pathParams",
+		],
+		[
+			"non-canonical optional path parameter syntax",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					path: "tenants/:tenantId?/widgets",
+				} as CrudResourceDefinition),
+			"canonical",
+		],
+		[
+			"embedded item parameter syntax",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					itemPath: "widget-:id",
+				} as CrudResourceDefinition),
+			"canonical",
+		],
+		[
+			"overlapping collection and item parameter names",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					path: "tenants/:id/widgets",
+					pathParams: {
+						contract: z.object({ id: z.coerce.number().int() }),
+						fields: { id: "id" },
+					},
+				} as CrudResourceDefinition),
+			"must be disjoint",
+		],
+		[
+			"duplicate collection parameter names",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					path: "tenants/:tenantId/parents/:tenantId/widgets",
+					idFields: { tenantId: "tenantId", id: "id" },
+					pathParams: {
+						contract: z.object({ tenantId: z.string() }),
+						fields: { tenantId: "tenantId" },
+					},
+				} as CrudResourceDefinition),
+			"path route parameters must contain unique values",
+		],
+		[
+			"pathParams fields that differ from path parameters",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					path: "tenants/:tenantId/widgets",
+					idFields: { tenantId: "tenantId", id: "id" },
+					pathParams: {
+						contract: z.object({ organizationId: z.string() }),
+						fields: { organizationId: "tenantId" },
+					},
+				} as CrudResourceDefinition),
+			"must match pathParams.fields",
+		],
+		[
+			"pathParams fields that differ from parent ID mappings",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					path: "tenants/:tenantId/widgets",
+					idFields: { tenantId: "organizationId", id: "id" },
+					pathParams: {
+						contract: z.object({ tenantId: z.string() }),
+						fields: { tenantId: "tenantId" },
+					},
+				} as CrudResourceDefinition),
+			"must match parent idFields mappings",
+		],
+		[
+			"duplicate pathParams field mappings",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					path: "organizations/:organizationId/projects/:projectId/widgets",
+					idFields: { organizationId: "tenantId", projectId: "projectId", id: "id" },
+					pathParams: {
+						contract: z.object({ organizationId: z.string(), projectId: z.string() }),
+						fields: { organizationId: "tenantId", projectId: "tenantId" },
+					},
+				} as CrudResourceDefinition),
+			"pathParams.fields mappings must contain unique values",
 		],
 		[
 			"empty ID persistence field",
@@ -163,7 +293,7 @@ describe("defineCrudResource", () => {
 					itemPath: ":tenantId/:widgetId",
 					idFields: { tenantId: "tenantId", id: "id" },
 				} as CrudResourceDefinition),
-			"match idFields exactly",
+			"full route parameters must match idFields exactly",
 		],
 		[
 			"duplicate ID field mapping",
@@ -183,7 +313,7 @@ describe("defineCrudResource", () => {
 					itemPath: ":id/:id",
 					idFields: { tenantId: "tenantId", id: "id" },
 				} as CrudResourceDefinition),
-			"match idFields exactly",
+			"itemPath route parameters must contain unique values",
 		],
 		[
 			"restore without soft delete",
@@ -193,6 +323,15 @@ describe("defineCrudResource", () => {
 					operations: crudOperations.only("restore"),
 				}),
 			"without softDelete",
+		],
+		[
+			"upsert without an upsert contract",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					operations: { upsert: {} },
+				} as CrudResourceDefinition),
+			"without contracts.upsert",
 		],
 		[
 			"cursor pagination without declared safe fields",
@@ -508,6 +647,76 @@ describe("CrudRegistry bootstrap validation", () => {
 		registry.register(bindingFor(source), fakeService());
 
 		expect(() => registry.onApplicationBootstrap()).toThrowError(/unregistered resource "targets"/);
+	});
+
+	it("rejects a relation whose registered target is nested", () => {
+		const target = defineCrudResource({
+			...validDefinition(),
+			name: "targets",
+			path: "parents/:parentId/targets",
+			idFields: { parentId: "parentId", id: "id" },
+			pathParams: {
+				contract: z.object({ parentId: z.string() }),
+				fields: { parentId: "parentId" },
+			},
+			contracts: {
+				...validDefinition().contracts,
+				id: z.object({ parentId: z.string(), id: z.coerce.number().int() }),
+			},
+		});
+		const source = defineCrudResource({
+			...validDefinition(),
+			name: "sources",
+			path: "sources",
+			relations: {
+				targets: {
+					type: "hasMany",
+					target: () => target,
+					local: ["id"],
+					foreign: ["id"],
+				},
+			},
+		});
+		const registry = new CrudRegistry();
+		registry.register(bindingFor(source), fakeService());
+		registry.register(bindingFor(target), fakeService());
+
+		expect(() => registry.onApplicationBootstrap()).toThrowError(
+			/cannot target nested resource "targets"/,
+		);
+	});
+
+	it("rejects a branded clone that aliases a registered relation target name", () => {
+		const target = defineCrudResource({
+			...validDefinition(),
+			name: "targets",
+			path: "targets",
+		});
+		const targetAlias = { ...target };
+		const source = defineCrudResource({
+			...validDefinition(),
+			name: "sources",
+			path: "sources",
+			relations: {
+				targets: {
+					type: "hasMany",
+					target: () => targetAlias,
+					local: ["id"],
+					foreign: ["id"],
+				},
+			},
+		});
+		const registry = new CrudRegistry();
+		registry.register(bindingFor(source), fakeService());
+		registry.register(bindingFor(target), fakeService());
+
+		expect(isCrudResource(targetAlias)).toBe(true);
+		expect(() => registry.getResource(targetAlias)).toThrowError(
+			/does not match the exact registered resource identity/,
+		);
+		expect(() => registry.onApplicationBootstrap()).toThrowError(
+			/must return the exact registered resource "targets"/,
+		);
 	});
 });
 

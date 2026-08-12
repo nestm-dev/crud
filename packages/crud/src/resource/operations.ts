@@ -13,6 +13,7 @@ export const CRUD_OPERATION_NAMES = [
 	"update",
 	"delete",
 	"restore",
+	"upsert",
 ] as const;
 
 export type CrudOperationName = (typeof CRUD_OPERATION_NAMES)[number];

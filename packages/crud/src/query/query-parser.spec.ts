@@ -232,6 +232,40 @@ describe("parseCrudListQuery", () => {
 		).rejects.toMatchObject({ code: "invalid_cursor", status: 400 });
 	});
 
+	it("rejects an after cursor issued for another fixed parent collection", async () => {
+		const order = buildCrudOrder(membershipResource, undefined, "cursor");
+		const token = await encodeCrudCursor(
+			codec,
+			{
+				resource: membershipResource.name,
+				order,
+				fixed: [{ field: "tenant_id", value: "tenant-a" }],
+			},
+			[100, "tenant-a", 7],
+		);
+
+		await expect(
+			parseCrudListQuery(
+				membershipResource,
+				{ after: token },
+				{
+					cursorCodec: codec,
+					cursorFixedValues: [{ field: "tenant_id", value: "tenant-a" }],
+				},
+			),
+		).resolves.toMatchObject({ mode: "cursor" });
+		await expect(
+			parseCrudListQuery(
+				membershipResource,
+				{ after: token },
+				{
+					cursorCodec: codec,
+					cursorFixedValues: [{ field: "tenant_id", value: "tenant-b" }],
+				},
+			),
+		).rejects.toMatchObject({ code: "invalid_cursor", status: 400 });
+	});
+
 	it.each([
 		[{ page: "1", after: "token" }, "invalid_pagination"],
 		[{ page: "1", limit: "6" }, "invalid_pagination"],

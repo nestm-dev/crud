@@ -11,6 +11,7 @@ import {
 import { isCrudAdapterError } from "../adapter/adapter.error.ts";
 import type { CrudAdapter, CrudAdapterContext } from "../adapter/adapter.types.ts";
 import type { CrudResourceBinding, CrudScopeCreateField } from "../adapter/binding.types.ts";
+import { encodeCrudCursor } from "../cursor/cursor.ts";
 import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
 import type { ResolvedCrudModuleOptions } from "../module/crud-module.options.ts";
 import { andCrudPredicates, orCrudPredicates } from "../query/predicate.ts";
@@ -21,12 +22,15 @@ import type {
 	AnyCrudResource,
 	CrudCreate,
 	CrudId,
+	CrudPathParams,
 	CrudResponseInput,
 	CrudUpdate,
+	CrudUpsert,
 } from "../resource/resource.types.ts";
 import type { CrudOperationName } from "../resource/operations.ts";
 import type {
 	CrudLifecycleHook,
+	CrudCollectionArgs,
 	CrudMutationEvent,
 	CrudOperationContext,
 	CrudProjection,
@@ -35,7 +39,10 @@ import type {
 } from "./runtime.types.ts";
 import type { CrudRegistry } from "./crud-registry.ts";
 
-type MutationName = Extract<CrudOperationName, "create" | "update" | "delete" | "restore">;
+type MutationName = Extract<
+	CrudOperationName,
+	"create" | "update" | "delete" | "restore" | "upsert"
+>;
 
 interface MutationResult<Resource extends AnyCrudResource> {
 	readonly response?: CrudResponseInput<Resource>;
@@ -86,13 +93,14 @@ export class CrudService<
 
 	async create(
 		input: CrudCreate<Resource>,
-		executionContext?: ExecutionContext,
+		...args: CrudCollectionArgs<Resource>
 	): Promise<CrudResponseInput<Resource>> {
+		const { executionContext, pathParams } = this.collectionArguments(args);
 		let committed: MutationResult<Resource> | undefined;
 		const result = await this.runAdapter(async () =>
 			this.adapter.transaction(
 				async (session) => {
-					const context = this.operationContext("create", executionContext, session);
+					const context = this.operationContext("create", executionContext, session, pathParams);
 					const scope = await this.resolveScopes(context);
 					let value = input;
 					for (const hook of this.hooks) {
@@ -101,10 +109,11 @@ export class CrudService<
 						}
 					}
 					const mapped = await this.binding.mappings.create(value);
+					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
 					const scoped =
 						this.binding.mappings.scopeCreate === undefined
-							? await this.binding.mappings.persistence(scope.createValues ?? {})
-							: await this.binding.mappings.scopeCreate(scope.createValues ?? {});
+							? await this.binding.mappings.persistence(scopeCreateValues)
+							: await this.binding.mappings.scopeCreate(scopeCreateValues);
 					this.assertScopeCreateFields(scoped);
 					// The runtime assertion above establishes the generic Pick that TypeScript cannot
 					// normalize back into an arbitrary adapter-defined CreateValues subtype.
@@ -117,28 +126,34 @@ export class CrudService<
 					committed = { response };
 					return response;
 				},
-				this.adapterContext(this.operationContext("create", executionContext)),
+				this.adapterContext(
+					this.operationContext("create", executionContext, undefined, pathParams),
+				),
 			),
 		);
-		await this.emitAfterCommit("create", committed, executionContext);
+		await this.emitAfterCommit("create", committed, executionContext, pathParams);
 		return result;
 	}
 
 	async list(
 		rawQuery: CrudRawQuery,
-		executionContext?: ExecutionContext,
+		...args: CrudCollectionArgs<Resource>
 	): Promise<CrudPage<CrudResponseInput<Resource>>> {
+		const { executionContext, pathParams } = this.collectionArguments(args);
+		const pathFixedValues = this.pathFixedValues(pathParams);
 		const query = await parseCrudListQuery(this.resource, rawQuery, {
 			...(this.cursorCodec === undefined ? {} : { cursorCodec: this.cursorCodec }),
+			...(pathFixedValues.length === 0 ? {} : { cursorFixedValues: pathFixedValues }),
 			defaultLimit: this.options.pagination.defaultLimit,
 			maxLimit: this.options.pagination.maxLimit,
 		});
-		const context = this.operationContext("list", executionContext);
+		const context = this.operationContext("list", executionContext, undefined, pathParams);
 		const scope = await this.resolveScopes(context);
 		const predicate = andCrudPredicates(
 			query.predicate,
 			this.searchPredicate(query.search),
 			this.deletedPredicate(query),
+			this.pathParamsPredicate(pathParams),
 			scope.predicate,
 		);
 		const result = await this.runAdapter(() =>
@@ -194,7 +209,7 @@ export class CrudService<
 		const last = records.at(-1);
 		const nextCursor =
 			hasNextPage && last !== undefined && this.cursorCodec !== undefined
-				? await this.encodeNextCursor(last, query.order, this.cursorCodec)
+				? await this.encodeNextCursor(last, query.order, this.cursorCodec, pathFixedValues)
 				: null;
 		return {
 			data,
@@ -207,7 +222,8 @@ export class CrudService<
 		executionContext?: ExecutionContext,
 		includes: readonly string[] = [],
 	): Promise<CrudResponseInput<Resource>> {
-		const context = this.operationContext("read", executionContext);
+		const pathParams = this.pathParamsFromId(id);
+		const context = this.operationContext("read", executionContext, undefined, pathParams);
 		const record = await this.findVisible(id, context);
 		const relations = (await this.loadRelations([record], includes, executionContext))[0] ?? {};
 		return this.mapRecord(record, relations, context);
@@ -218,11 +234,17 @@ export class CrudService<
 		input: CrudUpdate<Resource>,
 		executionContext?: ExecutionContext,
 	): Promise<CrudResponseInput<Resource>> {
+		const pathParams = this.pathParamsFromId(id);
 		let committed: MutationResult<Resource> | undefined;
 		const result = await this.runAdapter(() =>
 			this.adapter.transaction(
 				async (session) => {
-					const baseContext = this.operationContext("update", executionContext, session);
+					const baseContext = this.operationContext(
+						"update",
+						executionContext,
+						session,
+						pathParams,
+					);
 					const scope = await this.resolveScopes(baseContext);
 					const predicate = andCrudPredicates(
 						this.idPredicate(id),
@@ -248,19 +270,92 @@ export class CrudService<
 					committed = { response, prior };
 					return response;
 				},
-				this.adapterContext(this.operationContext("update", executionContext)),
+				this.adapterContext(
+					this.operationContext("update", executionContext, undefined, pathParams),
+				),
 			),
 		);
-		await this.emitAfterCommit("update", committed, executionContext);
+		await this.emitAfterCommit("update", committed, executionContext, pathParams);
+		return result;
+	}
+
+	async upsert(
+		id: CrudId<Resource>,
+		input: CrudUpsert<Resource>,
+		executionContext?: ExecutionContext,
+	): Promise<CrudResponseInput<Resource>> {
+		const pathParams = this.pathParamsFromId(id);
+		const adapter = this.adapter;
+		const mappings = this.binding.mappings;
+		const config = this.binding.upsert;
+		if (adapter.upsert === undefined || mappings.upsert === undefined || config === undefined) {
+			throw new InternalServerErrorException(
+				`CRUD upsert for "${this.resource.name}" is not configured.`,
+			);
+		}
+		const adapterUpsert = adapter.upsert.bind(adapter);
+		const mapUpsert = mappings.upsert.bind(mappings);
+		let committed: MutationResult<Resource> | undefined;
+		const result = await this.runAdapter(() =>
+			adapter.transaction(
+				async (session) => {
+					const context = this.operationContext("upsert", executionContext, session, pathParams);
+					const scope = await this.resolveScopes(context);
+					const predicate = andCrudPredicates(
+						this.idPredicate(id),
+						this.normalRowsPredicate(),
+						scope.predicate,
+					)!;
+					let value = input;
+					for (const hook of this.hooks) {
+						if (hook.beforeUpsert !== undefined) {
+							value = await hook.beforeUpsert(id, value, context);
+						}
+					}
+					const mapped = await mapUpsert(id, value);
+					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
+					const scoped =
+						mappings.scopeCreate === undefined
+							? await mappings.persistence(scopeCreateValues)
+							: await mappings.scopeCreate(scopeCreateValues);
+					this.assertScopeCreateFields(scoped);
+					const values = { ...mapped, ...scoped } as CreateValues;
+					const record = await adapterUpsert(
+						{
+							conflictFields: config.conflictFields,
+							overwriteFields: config.overwriteFields,
+							predicate,
+							values,
+						},
+						this.adapterContext(context),
+					);
+					if (record === null) throw this.notFound();
+					for (const hook of this.hooks) await hook.afterUpsert?.(record, context);
+					const response = await this.mapRecord(record, {}, context);
+					committed = { response };
+					return response;
+				},
+				this.adapterContext(
+					this.operationContext("upsert", executionContext, undefined, pathParams),
+				),
+			),
+		);
+		await this.emitAfterCommit("upsert", committed, executionContext, pathParams);
 		return result;
 	}
 
 	async delete(id: CrudId<Resource>, executionContext?: ExecutionContext): Promise<void> {
+		const pathParams = this.pathParamsFromId(id);
 		let committed: MutationResult<Resource> | undefined;
 		await this.runAdapter(() =>
 			this.adapter.transaction(
 				async (session) => {
-					const baseContext = this.operationContext("delete", executionContext, session);
+					const baseContext = this.operationContext(
+						"delete",
+						executionContext,
+						session,
+						pathParams,
+					);
 					const scope = await this.resolveScopes(baseContext);
 					const predicate = andCrudPredicates(
 						this.idPredicate(id),
@@ -288,10 +383,12 @@ export class CrudService<
 					for (const hook of this.hooks) await hook.afterDelete?.(record, context);
 					committed = { prior };
 				},
-				this.adapterContext(this.operationContext("delete", executionContext)),
+				this.adapterContext(
+					this.operationContext("delete", executionContext, undefined, pathParams),
+				),
 			),
 		);
-		await this.emitAfterCommit("delete", committed, executionContext);
+		await this.emitAfterCommit("delete", committed, executionContext, pathParams);
 	}
 
 	async restore(
@@ -302,11 +399,17 @@ export class CrudService<
 			throw new BadRequestException("Restore is not enabled for this resource.");
 		}
 		const softDelete = this.resource.softDelete;
+		const pathParams = this.pathParamsFromId(id);
 		let committed: MutationResult<Resource> | undefined;
 		const result = await this.runAdapter(() =>
 			this.adapter.transaction(
 				async (session) => {
-					const baseContext = this.operationContext("restore", executionContext, session);
+					const baseContext = this.operationContext(
+						"restore",
+						executionContext,
+						session,
+						pathParams,
+					);
 					const scope = await this.resolveScopes(baseContext);
 					const predicate = andCrudPredicates(
 						this.idPredicate(id),
@@ -331,10 +434,12 @@ export class CrudService<
 					committed = { response, prior };
 					return response;
 				},
-				this.adapterContext(this.operationContext("restore", executionContext)),
+				this.adapterContext(
+					this.operationContext("restore", executionContext, undefined, pathParams),
+				),
 			),
 		);
-		await this.emitAfterCommit("restore", committed, executionContext);
+		await this.emitAfterCommit("restore", committed, executionContext, pathParams);
 		return result;
 	}
 
@@ -393,6 +498,18 @@ export class CrudService<
 	}
 
 	private idPredicate(id: CrudId<Resource>): CrudPredicate {
+		const values = this.identifierValues(id);
+		return andCrudPredicates(
+			...Object.entries(this.resource.idFields).map(([parameter, field]) => ({
+				kind: "comparison" as const,
+				field,
+				operator: "eq" as const,
+				value: values[parameter],
+			})),
+		)!;
+	}
+
+	private identifierValues(id: CrudId<Resource>): Readonly<Record<string, unknown>> {
 		if (typeof id !== "object" || id === null) {
 			throw new BadRequestException("CRUD ID schemas must produce a parameter object.");
 		}
@@ -402,14 +519,7 @@ export class CrudService<
 				throw new BadRequestException(`CRUD ID schema did not produce parameter "${parameter}".`);
 			}
 		}
-		return andCrudPredicates(
-			...Object.entries(this.resource.idFields).map(([parameter, field]) => ({
-				kind: "comparison" as const,
-				field,
-				operator: "eq" as const,
-				value: values[parameter],
-			})),
-		)!;
+		return values;
 	}
 
 	private searchPredicate(search: string | undefined): CrudPredicate | undefined {
@@ -614,6 +724,7 @@ export class CrudService<
 		record: RecordType,
 		order: CrudListQuery["order"],
 		codec: CrudCursorCodec,
+		fixed: readonly { readonly field: string; readonly value: unknown }[] = [],
 	): Promise<string> {
 		try {
 			const values = order.map(({ field }) => this.adapter.getField(record, field));
@@ -622,12 +733,15 @@ export class CrudService<
 					`Cursor ordering for "${this.resource.name}" produced a nullable keyset value.`,
 				);
 			}
-			return await codec.encode({
-				version: 1,
-				resource: this.resource.name,
-				order,
+			return await encodeCrudCursor(
+				codec,
+				{
+					resource: this.resource.name,
+					order,
+					...(fixed.length === 0 ? {} : { fixed }),
+				},
 				values,
-			});
+			);
 		} catch (cause) {
 			throw new InternalServerErrorException("Failed to create a pagination cursor.", { cause });
 		}
@@ -649,16 +763,95 @@ export class CrudService<
 		};
 	}
 
+	private collectionArguments(args: CrudCollectionArgs<Resource>): {
+		readonly executionContext?: ExecutionContext;
+		readonly pathParams?: CrudPathParams<Resource>;
+	} {
+		if (this.resource.pathParams === undefined) {
+			const executionContext = args[0] as ExecutionContext | undefined;
+			return executionContext === undefined ? {} : { executionContext };
+		}
+		const pathParams = args[0] as CrudPathParams<Resource>;
+		if (typeof pathParams !== "object" || pathParams === null || Array.isArray(pathParams)) {
+			throw new BadRequestException("CRUD path parameter schemas must produce an object.");
+		}
+		const executionContext = args[1] as ExecutionContext | undefined;
+		return {
+			pathParams,
+			...(executionContext === undefined ? {} : { executionContext }),
+		};
+	}
+
+	private pathParamsFromId(id: CrudId<Resource>): CrudPathParams<Resource> | undefined {
+		if (this.resource.pathParams === undefined) return undefined;
+		const values = this.identifierValues(id);
+		return Object.fromEntries(
+			Object.keys(this.resource.pathParams.fields).map((parameter) => [
+				parameter,
+				values[parameter],
+			]),
+		) as CrudPathParams<Resource>;
+	}
+
+	private pathFixedValues(
+		pathParams: CrudPathParams<Resource> | undefined,
+	): readonly { readonly field: string; readonly value: unknown }[] {
+		if (this.resource.pathParams === undefined) return [];
+		if (typeof pathParams !== "object" || pathParams === null || Array.isArray(pathParams)) {
+			throw new BadRequestException("CRUD path parameter schemas must produce an object.");
+		}
+		const values = pathParams as Readonly<Record<string, unknown>>;
+		return Object.entries(this.resource.pathParams.fields).map(([parameter, field]) => {
+			if (!Object.hasOwn(values, parameter) || values[parameter] === undefined) {
+				throw new BadRequestException(
+					`CRUD path parameter schema did not produce parameter "${parameter}".`,
+				);
+			}
+			return { field, value: values[parameter] };
+		});
+	}
+
+	private pathParamsPredicate(
+		pathParams: CrudPathParams<Resource> | undefined,
+	): CrudPredicate | undefined {
+		return andCrudPredicates(
+			...this.pathFixedValues(pathParams).map(({ field, value }) => ({
+				kind: "comparison" as const,
+				field,
+				operator: "eq" as const,
+				value,
+			})),
+		);
+	}
+
+	private scopeCreateValues(
+		scope: CrudScopeResult,
+		pathParams: CrudPathParams<Resource> | undefined,
+	): Readonly<Record<string, unknown>> {
+		const values: Record<string, unknown> = { ...scope.createValues };
+		for (const { field, value } of this.pathFixedValues(pathParams)) {
+			if (Object.hasOwn(values, field) && !persistenceValuesEqual(values[field], value)) {
+				throw new InternalServerErrorException(
+					"CRUD path parameters conflict with scope-owned create values.",
+				);
+			}
+			values[field] = value;
+		}
+		return values;
+	}
+
 	private operationContext(
 		operation: CrudOperationName,
 		executionContext?: ExecutionContext,
 		session?: CrudOperationContext["session"],
+		pathParams?: CrudPathParams<Resource>,
 	): CrudOperationContext<Resource> {
 		return {
 			resource: this.resource,
 			operation,
 			...(executionContext === undefined ? {} : { executionContext }),
 			...(session === undefined ? {} : { session }),
+			...(pathParams === undefined ? {} : { pathParams }),
 		};
 	}
 
@@ -670,6 +863,7 @@ export class CrudService<
 				? {}
 				: { executionContext: context.executionContext }),
 			...(context.session === undefined ? {} : { session: context.session }),
+			...(context.pathParams === undefined ? {} : { pathParams: context.pathParams }),
 		};
 	}
 
@@ -677,6 +871,7 @@ export class CrudService<
 		operation: MutationName,
 		result: MutationResult<Resource> | undefined,
 		executionContext?: ExecutionContext,
+		pathParams?: CrudPathParams<Resource>,
 	): Promise<void> {
 		if (result === undefined) return;
 		const event: CrudMutationEvent<Resource> = {
@@ -685,6 +880,7 @@ export class CrudService<
 			...(result.response === undefined ? {} : { response: result.response }),
 			...(result.prior === undefined ? {} : { prior: result.prior }),
 			...(executionContext === undefined ? {} : { executionContext }),
+			...(pathParams === undefined ? {} : { pathParams }),
 		};
 		for (const hook of this.hooks) {
 			try {
@@ -748,6 +944,7 @@ export class CrudService<
 		for (const field of Object.keys(this.resource.query?.filters ?? {})) required.add(field);
 		for (const field of this.resource.query?.sort?.fields ?? []) required.add(field);
 		for (const field of this.resource.query?.search?.fields ?? []) required.add(field);
+		for (const field of Object.values(this.resource.pathParams?.fields ?? {})) required.add(field);
 		for (const relation of Object.values(this.resource.relations ?? {})) {
 			for (const field of relation.local) required.add(field);
 		}
@@ -761,7 +958,7 @@ export class CrudService<
 		if (Object.keys(this.resource.idFields).length > 1 && !this.adapter.capabilities.compositeIds) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks composite ID support.`);
 		}
-		const mutates = ["create", "update", "delete", "restore"].some(
+		const mutates = ["create", "update", "delete", "restore", "upsert"].some(
 			(operation) => this.resource.operations[operation as MutationName] !== undefined,
 		);
 		if (mutates && !this.adapter.capabilities.transactions) {
@@ -769,6 +966,43 @@ export class CrudService<
 		}
 		if (mutates && !this.adapter.capabilities.returning) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks returning mutations.`);
+		}
+		if (
+			this.resource.pathParams !== undefined &&
+			(this.resource.operations.create !== undefined ||
+				this.resource.operations.upsert !== undefined) &&
+			(this.binding.mappings.scopeCreate === undefined ||
+				(this.binding.scopeCreateFields?.length ?? 0) === 0)
+		) {
+			throw new TypeError(
+				`Nested CRUD insert binding for "${this.resource.name}" must declare scopeCreate and scopeCreateFields.`,
+			);
+		}
+		if (this.resource.operations.upsert !== undefined) {
+			if (this.adapter.capabilities.upsert !== true || this.adapter.upsert === undefined) {
+				throw new TypeError(
+					`CRUD adapter for "${this.resource.name}" lacks atomic upsert support.`,
+				);
+			}
+			if (this.binding.mappings.upsert === undefined || this.binding.upsert === undefined) {
+				throw new TypeError(`CRUD binding for "${this.resource.name}" must configure upsert.`);
+			}
+			const { conflictFields, overwriteFields } = this.binding.upsert;
+			assertPersistenceFieldTuple(this.resource.name, "upsert.conflictFields", conflictFields);
+			assertPersistenceFieldTuple(this.resource.name, "upsert.overwriteFields", overwriteFields);
+			const conflicts = new Set(conflictFields);
+			for (const field of overwriteFields) {
+				if (conflicts.has(field)) {
+					throw new TypeError(
+						`CRUD binding for "${this.resource.name}" cannot overwrite conflict field "${field}".`,
+					);
+				}
+				if (this.binding.scopeCreateFields?.includes(field) === true) {
+					throw new TypeError(
+						`CRUD binding for "${this.resource.name}" cannot overwrite scope-owned create field "${field}".`,
+					);
+				}
+			}
 		}
 		const needsInsensitive =
 			(this.resource.query?.search?.fields.length ?? 0) > 0 ||
@@ -832,4 +1066,42 @@ function encodeTupleValue(value: unknown): unknown {
 		];
 	}
 	throw new TypeError("CRUD relation keys must be serializable values.");
+}
+
+function persistenceValuesEqual(left: unknown, right: unknown): boolean {
+	if (Object.is(left, right)) return true;
+	if (left instanceof Date || right instanceof Date) {
+		return left instanceof Date && right instanceof Date && left.getTime() === right.getTime();
+	}
+	if (left instanceof Uint8Array || right instanceof Uint8Array) {
+		return (
+			left instanceof Uint8Array &&
+			right instanceof Uint8Array &&
+			left.length === right.length &&
+			left.every((value, index) => value === right[index])
+		);
+	}
+	return false;
+}
+
+function assertPersistenceFieldTuple(
+	resource: string,
+	label: string,
+	fields: readonly string[],
+): void {
+	if (fields.length === 0) {
+		throw new TypeError(`CRUD binding for "${resource}" ${label} cannot be empty.`);
+	}
+	const seen = new Set<string>();
+	for (const field of fields) {
+		if (typeof field !== "string" || field.trim() === "") {
+			throw new TypeError(
+				`CRUD binding for "${resource}" ${label} must contain non-empty strings.`,
+			);
+		}
+		if (seen.has(field)) {
+			throw new TypeError(`CRUD binding for "${resource}" ${label} repeats field "${field}".`);
+		}
+		seen.add(field);
+	}
 }

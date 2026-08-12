@@ -83,6 +83,26 @@ const compositeResource = defineCrudResource({
 	query: { pagination: { offset: true } },
 });
 
+const nestedResource = defineCrudResource({
+	name: "openapi-nested",
+	path: "matrix/parents/:parentId/children",
+	itemPath: ":id",
+	idFields: { parentId: "parentId", id: "id" },
+	pathParams: {
+		contract: z.object({ parentId: z.string().uuid() }),
+		fields: { parentId: "parentId" },
+	},
+	contracts: {
+		id: z.object({ parentId: z.string().uuid(), id: z.coerce.number().int().positive() }),
+		create: z.object({ name: z.string().min(1) }),
+		update: z.object({ name: z.string().min(1).optional() }),
+		upsert: z.object({ name: z.string().min(1) }),
+		response: z.object({ parentId: z.string().uuid(), id: z.number().int(), name: z.string() }),
+	},
+	operations: crudOperations.only("create", "list", "read", "upsert"),
+	query: { pagination: { offset: true } },
+});
+
 const relatedResource = defineCrudResource({
 	name: "openapi-related",
 	path: "matrix/related",
@@ -112,6 +132,7 @@ const resources = [
 	cursorResource,
 	dualResource,
 	compositeResource,
+	nestedResource,
 	relatedResource,
 ] as const;
 
@@ -186,6 +207,23 @@ describe("generated OpenAPI contract matrix", () => {
 
 		expect(pathParameters).toEqual(["tenantId", "id"]);
 		expect(new Set(pathParameters).size).toBe(pathParameters.length);
+	});
+
+	it("documents nested collection and item parameters without duplication", () => {
+		const collection = operation(document, "/matrix/parents/{parentId}/children", "get");
+		const read = operation(document, "/matrix/parents/{parentId}/children/{id}", "get");
+		const upsert = operation(document, "/matrix/parents/{parentId}/children/{id}", "put");
+		const collectionPathParameters = parameters(collection)
+			.filter((parameter) => parameter.in === "path")
+			.map((parameter) => parameter.name);
+		const itemPathParameters = parameters(read)
+			.filter((parameter) => parameter.in === "path")
+			.map((parameter) => parameter.name);
+
+		expect(collectionPathParameters).toEqual(["parentId"]);
+		expect(itemPathParameters).toEqual(["parentId", "id"]);
+		expect(new Set(itemPathParameters).size).toBe(itemPathParameters.length);
+		expect(upsert.responses["200"]).toBeDefined();
 	});
 
 	it("emits only routes selected by all, readOnly, and only presets", () => {
@@ -337,7 +375,7 @@ const zodStandardSchemaConverter: StandardSchemaConverter = (schema, options) =>
 	};
 };
 
-type HttpMethod = "delete" | "get" | "patch" | "post";
+type HttpMethod = "delete" | "get" | "patch" | "post" | "put";
 type PathItem = NonNullable<OpenAPIObject["paths"][string]>;
 type OperationObject = NonNullable<PathItem["get"]>;
 type Parameter = NonNullable<OperationObject["parameters"]>[number];
@@ -356,7 +394,7 @@ function operation(document: OpenAPIObject, path: string, method: HttpMethod): O
 function methodsAt(document: OpenAPIObject, path: string): readonly string[] {
 	const item = document.paths[path];
 	if (item === undefined) throw new TypeError(`Missing OpenAPI path ${path}.`);
-	return (["delete", "get", "patch", "post"] as const)
+	return (["delete", "get", "patch", "post", "put"] as const)
 		.filter((method) => item[method] !== undefined)
 		.toSorted();
 }

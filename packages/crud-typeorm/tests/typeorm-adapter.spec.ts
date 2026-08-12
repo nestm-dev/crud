@@ -242,6 +242,7 @@ describe("TypeOrmCrudAdapter construction", () => {
 			returning: true,
 			compositeIds: true,
 			containsInsensitive: true,
+			upsert: true,
 		});
 	});
 

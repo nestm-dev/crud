@@ -12,6 +12,20 @@ export interface CrudCursor {
 export interface CrudCursorBinding {
 	readonly resource: string;
 	readonly order: readonly CrudOrder[];
+	/**
+	 * Ordered fields whose values are fixed by the collection route rather than
+	 * chosen by the client, for example a nested resource's parent identity.
+	 *
+	 * The values already occur in the cursor keyset. Binding them here prevents
+	 * a valid cursor issued for one parent collection from being replayed under
+	 * another parent with the same resource and ordering.
+	 */
+	readonly fixed?: readonly CrudCursorFixedValue[];
+}
+
+export interface CrudCursorFixedValue {
+	readonly field: string;
+	readonly value: unknown;
 }
 
 /** Adapter-independent cursor serialization contract. */

@@ -10,6 +10,8 @@ export interface CrudAdapterCapabilities {
 	readonly returning: boolean;
 	readonly compositeIds: boolean;
 	readonly containsInsensitive: boolean;
+	/** Whether this adapter implements the atomic upsert contract. */
+	readonly upsert?: boolean;
 }
 
 export interface CrudAdapterSession {
@@ -22,6 +24,8 @@ export interface CrudAdapterContext {
 	readonly operation: CrudOperationName;
 	readonly executionContext?: ExecutionContext;
 	readonly session?: CrudAdapterSession;
+	/** Parsed collection-path parameters for a nested resource. */
+	readonly pathParams?: CrudValues;
 }
 
 export interface CrudFindOneInput {
@@ -49,6 +53,17 @@ export interface CrudCreateInput<CreateValues extends object = CrudValues> {
 export interface CrudUpdateInput<UpdateValues extends object = CrudValues> {
 	readonly predicate: CrudPredicate;
 	readonly values: UpdateValues;
+}
+
+export interface CrudUpsertInput<CreateValues extends object = CrudValues> {
+	/** Complete, non-empty adapter persistence paths forming the conflict target. */
+	readonly conflictFields: readonly [string, ...string[]];
+	/** Predicate that must still match when the conflict branch updates an existing row. */
+	readonly predicate: CrudPredicate;
+	/** One proposed insert row. Conflict updates copy only `overwriteFields` from this row. */
+	readonly values: CreateValues;
+	/** Non-empty adapter persistence paths copied from the proposed row on conflict. */
+	readonly overwriteFields: readonly [string, ...string[]];
 }
 
 export interface CrudDeleteInput {
@@ -80,8 +95,31 @@ export interface CrudAdapter<
 		input: CrudUpdateInput<UpdateValues>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null>;
+	/**
+	 * Atomically inserts or updates one complete resource identity.
+	 *
+	 * Implementations advertising `capabilities.upsert` must apply `predicate` inside
+	 * the conflict-update statement and return `null` when an existing row is not visible.
+	 */
+	upsert?(
+		input: CrudUpsertInput<CreateValues>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null>;
 	delete(input: CrudDeleteInput, context: CrudAdapterContext): Promise<RecordType | null>;
 	getField(record: RecordType, field: string): unknown;
+}
+
+/** Adapter refinement for implementations certified for the atomic upsert contract. */
+export interface CrudUpsertAdapter<
+	RecordType = unknown,
+	CreateValues extends object = object,
+	UpdateValues extends object = object,
+> extends CrudAdapter<RecordType, CreateValues, UpdateValues> {
+	readonly capabilities: CrudAdapterCapabilities & { readonly upsert: true };
+	upsert(
+		input: CrudUpsertInput<CreateValues>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null>;
 }
 
 export type CrudAdapterFactory<

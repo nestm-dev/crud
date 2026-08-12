@@ -8,6 +8,7 @@ import type {
 	CrudFindManyInput,
 	CrudFindManyResult,
 	CrudFindOneInput,
+	CrudUpsertInput,
 	CrudUpdateInput,
 } from "@nestm/crud/adapter";
 import {
@@ -17,6 +18,7 @@ import {
 	type EntityMetadata,
 	type EntityManager,
 	type FindOptionsSelect,
+	type InsertQueryBuilder,
 	type ObjectLiteral,
 	type QueryDeepPartialEntity,
 	type Repository,
@@ -24,6 +26,8 @@ import {
 } from "typeorm";
 
 import { compileTypeOrmPredicate } from "./typeorm-predicate.ts";
+
+type TypeOrmColumnMetadata = EntityMetadata["columns"][number];
 
 export type TypeOrmCrudCreateValues<RecordType extends ObjectLiteral> = DeepPartial<RecordType>;
 export type TypeOrmCrudUpdateValues<RecordType extends ObjectLiteral> = DeepPartial<RecordType>;
@@ -330,6 +334,14 @@ function normalizeSelectedUpdateValues(
 	return normalized;
 }
 
+function scalarMutationColumn(
+	metadata: EntityMetadata,
+	propertyPath: string,
+): TypeOrmColumnMetadata | undefined {
+	const column = metadata.findColumnWithPropertyPathStrict(propertyPath);
+	return column === undefined || column.isVirtual || column.isVirtualProperty ? undefined : column;
+}
+
 function transactionRequirements(
 	context: CrudAdapterContext,
 	rowPredicateIsolationLevel?: TypeOrmCrudTransactionIsolationLevel,
@@ -401,6 +413,7 @@ export class TypeOrmCrudAdapter<
 		returning: true,
 		compositeIds: true,
 		containsInsensitive: true,
+		upsert: true,
 	});
 
 	readonly #repository: Repository<EntityType>;
@@ -497,6 +510,61 @@ export class TypeOrmCrudAdapter<
 					}
 					const entity = repository.create(input.values);
 					return (await repository.save(entity)) as unknown as RecordType;
+				},
+			);
+		} catch (error) {
+			throw databaseError(error);
+		}
+	}
+
+	async upsert(
+		input: CrudUpsertInput<DeepPartial<EntityType>>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null> {
+		try {
+			return await this.#withRepository(
+				context,
+				{
+					accessMode: "read write",
+					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					mustOwnCommit: true,
+				},
+				this.#rowPredicate !== undefined,
+				async (repository, activeContext) => {
+					this.#assertUpsertSupported(repository);
+					const entity = repository.create(input.values);
+					const conflictColumns = this.#upsertConflictColumns(
+						repository,
+						entity,
+						input.conflictFields,
+					);
+					const overwriteColumns = this.#upsertOverwriteColumns(
+						repository,
+						entity,
+						input.overwriteFields,
+					);
+					const overwriteCondition = await this.#upsertOverwriteCondition(
+						repository,
+						input.predicate,
+						activeContext,
+					);
+					const returning = this.#returningPropertyPaths(repository);
+					const mutation = repository
+						.createQueryBuilder()
+						.insert()
+						.into(repository.target)
+						.values(entity);
+					this.#aliasUpsertTarget(mutation);
+					const result = await mutation
+						.orUpdate(overwriteColumns, conflictColumns, {
+							overwriteCondition,
+						})
+						.updateEntity(false)
+						.returning([...returning])
+						.execute();
+					return result.raw.length === 0
+						? null
+						: this.#hydrateReturning(repository, result.raw[0], returning);
 				},
 			);
 		} catch (error) {
@@ -893,21 +961,66 @@ export class TypeOrmCrudAdapter<
 		return mutation.where(`${target} IN (${selector.getQuery()})`, selector.getParameters());
 	}
 
-	#hydrateReturning(repository: Repository<EntityType>, raw: unknown): RecordType {
+	#returningPropertyPaths(repository: Repository<EntityType>): readonly string[] {
+		return (
+			this.#selectedPropertyPaths ??
+			repository.metadata.columns
+				.filter((column) => !column.isVirtual && !column.isVirtualProperty)
+				.map((column) => column.propertyPath)
+		);
+	}
+
+	#aliasUpsertTarget(query: InsertQueryBuilder<EntityType>): void {
+		const alias = query.expressionMap.mainAlias;
+		if (alias === undefined) {
+			throw new CrudAdapterError(
+				"unknown",
+				"TypeORM did not register the CRUD upsert target table.",
+			);
+		}
+		// `into()` resets an explicit QueryBuilder alias to the target table name.
+		// Restoring the dedicated alias makes the ON CONFLICT authorization predicate
+		// unambiguous, including for schema-qualified tables and a table named excluded.
+		alias.name = TYPEORM_CRUD_ALIAS;
+	}
+
+	#assertUpsertSupported(repository: Repository<EntityType>): void {
+		if (repository.metadata.treeType !== undefined) {
+			throw new CrudAdapterError(
+				"unsupported",
+				"TypeORM CRUD upsert does not support tree entities.",
+			);
+		}
+		if (
+			repository.metadata.inheritancePattern === "STI" &&
+			repository.metadata.childEntityMetadatas.length > 0
+		) {
+			throw new CrudAdapterError(
+				"unsupported",
+				"TypeORM CRUD upsert does not support base single-table inheritance repositories.",
+			);
+		}
+	}
+
+	#hydrateReturning(
+		repository: Repository<EntityType>,
+		raw: unknown,
+		propertyPaths: readonly string[] = this.#selectedPropertyPaths ?? [],
+	): RecordType {
 		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
 			throw new CrudAdapterError(
 				"unknown",
-				"TypeORM did not return the selected columns for the CRUD mutation.",
+				"TypeORM did not return the requested columns for the CRUD mutation.",
 			);
 		}
 		const values = raw as Readonly<Record<string, unknown>>;
 		const record = repository.metadata.create(repository.queryRunner, { fromDeserializer: true });
-		for (const propertyPath of this.#selectedPropertyPaths ?? []) {
+		for (const propertyPath of propertyPaths) {
 			const column = repository.metadata.findColumnWithPropertyPathStrict(propertyPath);
 			if (column === undefined || !Object.hasOwn(values, column.databaseName)) {
 				throw new CrudAdapterError(
 					"unknown",
-					`TypeORM omitted selected property '${propertyPath}' from the CRUD mutation result.`,
+					`TypeORM omitted requested property '${propertyPath}' from the CRUD mutation result.`,
 				);
 			}
 			column.setEntityValue(
@@ -919,6 +1032,115 @@ export class TypeOrmCrudAdapter<
 			);
 		}
 		return record as RecordType;
+	}
+
+	#upsertConflictColumns(
+		repository: Repository<EntityType>,
+		entity: EntityType,
+		propertyPaths: readonly string[],
+	): string[] {
+		const primaryColumns = repository.metadata.primaryColumns;
+		if (propertyPaths.length !== primaryColumns.length || propertyPaths.length === 0) {
+			throw new CrudAdapterError(
+				"unsupported",
+				"TypeORM CRUD upsert conflict fields must map to the complete primary identity.",
+			);
+		}
+		if (primaryColumns.some((column) => column.isVirtual || column.isVirtualProperty)) {
+			throw new CrudAdapterError(
+				"unsupported",
+				"TypeORM CRUD upsert requires a physical scalar primary identity.",
+			);
+		}
+
+		const expected = new Set(primaryColumns);
+		const seenColumns = new Set<TypeOrmColumnMetadata>();
+		const databaseNames: string[] = [];
+		for (const propertyPath of propertyPaths) {
+			const column = scalarMutationColumn(repository.metadata, propertyPath);
+			if (column === undefined || !expected.has(column) || seenColumns.has(column)) {
+				throw new CrudAdapterError(
+					"unsupported",
+					"TypeORM CRUD upsert conflict fields must map to the complete primary identity.",
+				);
+			}
+			if (column.getEntityValue(entity) === undefined || column.getEntityValue(entity) === null) {
+				throw new CrudAdapterError(
+					"unsupported",
+					`TypeORM CRUD upsert conflict field '${propertyPath}' is absent from the proposed row.`,
+				);
+			}
+			seenColumns.add(column);
+			databaseNames.push(column.databaseName);
+		}
+		if (seenColumns.size !== expected.size) {
+			throw new CrudAdapterError(
+				"unsupported",
+				"TypeORM CRUD upsert conflict fields must map to the complete primary identity.",
+			);
+		}
+		return databaseNames;
+	}
+
+	#upsertOverwriteColumns(
+		repository: Repository<EntityType>,
+		entity: EntityType,
+		propertyPaths: readonly string[],
+	): string[] {
+		if (propertyPaths.length === 0) {
+			throw new CrudAdapterError(
+				"unsupported",
+				"TypeORM CRUD upsert requires at least one overwrite field.",
+			);
+		}
+		const seen = new Set<TypeOrmColumnMetadata>();
+		const databaseNames: string[] = [];
+		for (const propertyPath of propertyPaths) {
+			const column = scalarMutationColumn(repository.metadata, propertyPath);
+			if (
+				column === undefined ||
+				column.isPrimary ||
+				!column.isInsert ||
+				!column.isUpdate ||
+				seen.has(column)
+			) {
+				throw new CrudAdapterError(
+					"unsupported",
+					`TypeORM CRUD upsert overwrite field '${propertyPath}' must be a unique, mutable scalar persistence property.`,
+				);
+			}
+			if (column.getEntityValue(entity) === undefined) {
+				throw new CrudAdapterError(
+					"unsupported",
+					`TypeORM CRUD upsert overwrite field '${propertyPath}' is absent from the proposed row.`,
+				);
+			}
+			seen.add(column);
+			databaseNames.push(column.databaseName);
+		}
+		return databaseNames;
+	}
+
+	async #upsertOverwriteCondition(
+		repository: Repository<EntityType>,
+		predicate: CrudFindOneInput["predicate"],
+		context: CrudAdapterContext,
+	): Promise<{ where: string; parameters: Readonly<Record<string, unknown>> }> {
+		const selector = repository.createQueryBuilder(TYPEORM_CRUD_ALIAS).select("1");
+		await this.#where(selector, predicate, context);
+		const sql = selector.getQuery();
+		const marker = " WHERE ";
+		const whereIndex = sql.indexOf(marker);
+		if (whereIndex < 0) {
+			throw new CrudAdapterError(
+				"unknown",
+				"TypeORM did not compile the required CRUD upsert authorization predicate.",
+			);
+		}
+		return {
+			where: sql.slice(whereIndex + marker.length),
+			parameters: selector.getParameters(),
+		};
 	}
 
 	async #findOne(

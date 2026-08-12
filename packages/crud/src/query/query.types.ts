@@ -1,5 +1,5 @@
 import type { CrudSchemaSource } from "../schema/schema.types.ts";
-import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
+import type { CrudCursorCodec, CrudCursorFixedValue } from "../cursor/cursor.types.ts";
 
 export const CRUD_FILTER_OPERATORS = [
 	"eq",
@@ -120,6 +120,8 @@ export type CrudRawQuery = URLSearchParams | Readonly<Record<string, unknown>>;
 export interface CrudQueryParserOptions {
 	/** Codec used to verify and decode an `after` cursor. */
 	readonly cursorCodec?: CrudCursorCodec;
+	/** Route-owned values that bind a cursor to one nested collection. */
+	readonly cursorFixedValues?: readonly CrudCursorFixedValue[];
 	/** Used when a resource does not configure a default limit. */
 	readonly defaultLimit?: number;
 	/** Used when a resource does not configure a maximum limit. */

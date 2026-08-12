@@ -93,6 +93,58 @@ Updates containing only `undefined`, empty embedded objects, or non-updatable
 columns are treated as no-ops. Omit `select` to preserve the legacy full-entity
 path.
 
+## Atomic upsert
+
+When a resource enables the core `upsert` operation, configure its binding with
+the complete TypeORM primary identity and the exact persistence fields that may
+change on conflict:
+
+```ts
+const viewerBindings = bindTypeOrmCrud({
+	resource,
+	fields,
+	adapter: { useValue: viewerBindingsAdapter },
+	upsert: {
+		conflictFields: ["artifactId", "viewerUserId", "mcpServerId"],
+		overwriteFields: ["toolPrefix", "allowedTools"],
+	},
+	mappings: {
+		// The final row also receives scope-owned fields through scopeCreate.
+		upsert: (id, input) => ({ ...id, ...input }),
+		// ...the other ordinary mappings
+	},
+});
+```
+
+Both lists contain TypeORM entity property paths, not public CRUD field names or
+database column names. `conflictFields` must be non-empty, map exactly once to
+every primary column, and have non-null values in the final scoped insert row.
+`overwriteFields` must be unique, non-primary scalar columns that TypeORM permits
+on both insert and update. This explicit allowlist prevents an upsert from
+silently replacing immutable ownership or secret fields.
+
+The adapter emits one PostgreSQL `INSERT ... ON CONFLICT (...) DO UPDATE ...
+WHERE ... RETURNING ...` statement. The normal CRUD predicate and native
+`rowPredicate` are both compiled into the conflict-update `WHERE`; a conflicting
+row that fails either predicate is left unchanged and returns `null`. PostgreSQL
+does not apply that update predicate to a new insert. The CRUD scope must
+materialize insert ownership fields, while database RLS and constraints remain
+the final insert boundary.
+
+Upsert never performs a pre-read, `save()`, or reload. With `select`, its
+`RETURNING` list and hydrated record contain only selected scalar columns. Without
+`select`, it explicitly returns and hydrates every physical scalar metadata
+column. Tree entities and base single-table-inheritance repositories are rejected
+because their primitive-DML semantics are not safe; concrete STI child
+repositories remain supported.
+
+The statement uses TypeORM's insert query-builder lifecycle: entity construction
+and insert listeners run for the proposed row, and PostgreSQL triggers/defaults
+run normally. It does not emulate `Repository.save()` relation cascades or
+full-entity update listeners. The returned record is separately hydrated from
+`RETURNING`, so in-memory decorations made by an after-insert listener on the
+proposed entity are not copied to it.
+
 The binder accepts Nest `useValue`, `useClass`, `useExisting`, and `useFactory`
 adapter providers. For an injected repository, construct the adapter in a
 `useFactory` and list the repository token in `inject`. The package never
