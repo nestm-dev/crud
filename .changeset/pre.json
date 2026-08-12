@@ -13,6 +13,7 @@
 		"drizzle-transaction-boundaries",
 		"headless-crud-features",
 		"initial-crud-alpha",
+		"nested-resources-atomic-upsert",
 		"swagger-filter-builder",
 		"typeorm-scoped-transactions",
 		"typeorm-selected-records"
