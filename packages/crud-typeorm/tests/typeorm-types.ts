@@ -7,20 +7,83 @@ import {
 	bindTypeOrmCrud,
 	createTypeOrmCrudAdapter,
 	type BindTypeOrmCrudOptions,
+	TypeOrmCrudAdapter,
+	type TypeOrmCrudAdapterOptions,
+	type TypeOrmCrudSelectedRecord,
 } from "../src/index.ts";
+
+class UserProfile {
+	readonly nickname!: string;
+}
 
 interface UserEntity {
 	readonly id: number;
 	name: string;
 	tenantId: string;
+	secret: string;
+	profile: UserProfile | null;
+	optionalLabel?: string;
 }
 
 declare const repository: Repository<UserEntity>;
 
 export const adapter = createTypeOrmCrudAdapter({
 	repository,
-	columns: { id: "id", name: "name", tenantId: "tenantId" },
+	columns: { id: "id", name: "name", tenantId: "tenantId", secret: "secret" },
 });
+
+export const selectedAdapter = createTypeOrmCrudAdapter({
+	repository,
+	columns: { id: "id", name: "name", tenantId: "tenantId", secret: "secret" },
+	select: {
+		id: true,
+		name: true,
+		profile: { nickname: true },
+		optionalLabel: true,
+	},
+});
+
+const selection = {
+	id: true,
+	name: true,
+	profile: { nickname: true },
+	optionalLabel: true,
+} as const;
+type SelectedUser = TypeOrmCrudSelectedRecord<UserEntity, typeof selection>;
+declare const selectedUser: SelectedUser;
+const selectedNickname: string | undefined = selectedUser.profile?.nickname;
+const selectedOptionalLabel: string | undefined = selectedUser.optionalLabel;
+// @ts-expect-error Selected records preserve readonly entity fields.
+selectedUser.id = 2;
+void selectedNickname;
+void selectedOptionalLabel;
+
+declare const conditionalSelection: { readonly id: true; readonly name?: true };
+const conditionalAdapter = createTypeOrmCrudAdapter({
+	repository,
+	columns: { id: "id", name: "name" },
+	select: conditionalSelection,
+});
+type ConditionalRecord = Exclude<Awaited<ReturnType<typeof conditionalAdapter.findOne>>, null>;
+declare const conditionalRecord: ConditionalRecord;
+const maybeSelectedName: string | undefined = conditionalRecord.name;
+// @ts-expect-error A conditionally selected field is not definitely hydrated.
+const definitelySelectedName: string = conditionalRecord.name;
+void maybeSelectedName;
+void definitelySelectedName;
+
+// The public class constructor is full-entity only; selected construction goes through
+// the factory so its narrowed output type cannot be accidentally omitted.
+// @ts-expect-error Direct construction cannot accept a selected record configuration.
+new TypeOrmCrudAdapter({ repository, columns: { id: "id" }, select: { id: true } });
+
+declare const widenedOptions: TypeOrmCrudAdapterOptions<UserEntity>;
+const widenedAdapter: CrudAdapter<
+	DeepPartial<UserEntity>,
+	DeepPartial<UserEntity>,
+	DeepPartial<UserEntity>
+> = createTypeOrmCrudAdapter(widenedOptions);
+void widenedAdapter;
 
 const nativeAdapter: CrudAdapter<
 	UserEntity,
@@ -33,6 +96,12 @@ void adapter.create(
 	{ values: { name: "Ada", tenantId: "tenant" } },
 	{ resource: "users", operation: "create" },
 );
+
+void selectedAdapter.create(
+	{ values: { name: "Ada", tenantId: "tenant", secret: "encrypted" } },
+	{ resource: "users", operation: "create" },
+);
+
 void adapter.create(
 	{
 		// @ts-expect-error TypeORM create values use DeepPartial<Entity> property types.
@@ -56,6 +125,24 @@ const resource = defineCrudResource({
 });
 
 const fields = ["id", "name", "tenantId"] as const;
+
+const selectedBinding = bindTypeOrmCrud({
+	resource,
+	adapter: { useValue: selectedAdapter },
+	fields: ["id", "name"],
+	mappings: {
+		create: (input) => ({ name: input.name, tenantId: "tenant", secret: "encrypted" }),
+		update: (input) => (input.name === undefined ? {} : { name: input.name }),
+		persistence: () => ({}),
+		response: (record) => {
+			void record.id;
+			void record.name;
+			// @ts-expect-error Unselected entity fields are absent from the hydrated record type.
+			void record.secret;
+			return { id: record.id, name: record.name };
+		},
+	},
+});
 
 const binding = bindTypeOrmCrud({
 	resource,
@@ -116,6 +203,7 @@ type InvalidScopeCreateField = BindTypeOrmCrudOptions<
 >;
 
 void binding;
+void selectedBinding;
 void invalidOptions;
 void scopedBinding;
 declare const invalidScopeCreateField: InvalidScopeCreateField;

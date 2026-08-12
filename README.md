@@ -454,6 +454,14 @@ never create, initialize, connect, disconnect, or destroy consumer-owned
 repositories and clients. In the first alpha, TypeORM 1.1.x, Drizzle 0.45.x,
 and Prisma 7.9.x are certified against PostgreSQL only.
 
+The TypeORM adapter also accepts a native `select` object for resources backed
+by entities with sensitive or operational columns. Selected mode narrows both
+the database hydration and the binding's record type, and its direct DML path
+uses only an explicit `RETURNING` allowlist so TypeORM cannot perform a hidden
+full-row reload during mutations. All primary columns must be selected. Entity
+constructors and load listeners can still add runtime properties; see the
+package README for the query-builder lifecycle tradeoffs.
+
 Every binding supplies four required mappings: `create` and `update` map API
 values, `persistence` maps framework-generated update/soft-delete values, and
 `response` maps a record plus loaded relations into the response-schema input.
