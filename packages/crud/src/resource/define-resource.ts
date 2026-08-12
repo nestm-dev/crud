@@ -175,6 +175,9 @@ function snapshotResourceDefinition<Definition extends CrudResourceDefinition>(
 		...(softDelete === undefined ? {} : { softDelete }),
 		...(relations === undefined ? {} : { relations }),
 		...(definition.hooks === undefined ? {} : { hooks: Object.freeze([...definition.hooks]) }),
+		...(definition.validators === undefined
+			? {}
+			: { validators: Object.freeze([...definition.validators]) }),
 		...(definition.scopes === undefined ? {} : { scopes: Object.freeze([...definition.scopes]) }),
 		...(definition.enhancers === undefined
 			? {}

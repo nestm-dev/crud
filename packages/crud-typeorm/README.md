@@ -39,6 +39,60 @@ and soft delete generate logical values outside create/update input mappings.
 Native `rowPredicate` parameters must not use the adapter-reserved `crud_<n>`
 names; a collision is rejected before the statement executes.
 
+## Transaction-scoped reference checks
+
+Mutation validators can verify a referenced TypeORM row without opening a second
+transaction or calling the target resource's `CrudService`:
+
+```ts
+const servers = createTypeOrmCrudReferenceChecker({
+	target: McpServer,
+	columns: {
+		id: "id",
+		organizationId: "organizationId",
+		ownerUserId: "ownerUserId",
+	},
+});
+
+const exists = await servers.exists(
+	{
+		predicate: {
+			kind: "and",
+			predicates: [
+				{ kind: "comparison", field: "id", operator: "eq", value: input.serverId },
+				{
+					kind: "comparison",
+					field: "organizationId",
+					operator: "eq",
+					value: artifact.organizationId,
+				},
+			],
+		},
+	},
+	validationContext,
+);
+```
+
+The checker accepts a CRUD predicate, a native TypeORM `Brackets` predicate, or
+both. The caller must include both the referenced identity and the complete
+visibility/ownership policy; predicates configured on another CRUD adapter are
+not copied automatically. Database RLS remains the final isolation boundary.
+
+Checks require the active TypeORM CRUD mutation session. The checker gets the
+target repository from that session's `EntityManager`, executes in the same
+read-write transaction, and uses PostgreSQL `FOR SHARE` so concurrent changes
+cannot invalidate the checked target before the mutation completes. Missing,
+foreign, expired, and read-only sessions fail before target access. A checker
+never starts or joins a transaction itself. The checker and source adapter must
+resolve from the same installed `@nestm/crud-typeorm` package instance; a
+session presented to a duplicate package copy fails closed as foreign.
+
+Existence queries use `SELECT 1` and a raw result. They do not hydrate the target
+entity, run column transformers or `@AfterLoad`, or select excluded/secret
+columns. A missing or invisible row returns `false`; the application validator
+chooses the domain or HTTP exception. Native parameters must not collide with
+the reserved `crud_<n>` names used by neutral predicates.
+
 ## Selected records
 
 Use TypeORM's native `select` shape when an entity contains columns that a CRUD

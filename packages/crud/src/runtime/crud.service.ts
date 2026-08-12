@@ -9,7 +9,11 @@ import {
 } from "@nestjs/common";
 
 import { isCrudAdapterError } from "../adapter/adapter.error.ts";
-import type { CrudAdapter, CrudAdapterContext } from "../adapter/adapter.types.ts";
+import type {
+	CrudAdapter,
+	CrudAdapterContext,
+	CrudAdapterSession,
+} from "../adapter/adapter.types.ts";
 import type { CrudResourceBinding, CrudScopeCreateField } from "../adapter/binding.types.ts";
 import { encodeCrudCursor } from "../cursor/cursor.ts";
 import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
@@ -32,12 +36,20 @@ import type {
 	CrudLifecycleHook,
 	CrudCollectionArgs,
 	CrudMutationEvent,
+	CrudMutationValidator,
 	CrudOperationContext,
 	CrudProjection,
 	CrudScope,
 	CrudScopeResult,
+	CrudValidationContext,
 } from "./runtime.types.ts";
 import type { CrudRegistry } from "./crud-registry.ts";
+import {
+	EMPTY_CRUD_FACTS,
+	resolveCrudFacts,
+	type CrudFactEntry,
+	type CrudFacts,
+} from "./crud-facts.ts";
 
 type MutationName = Extract<
 	CrudOperationName,
@@ -54,6 +66,10 @@ interface RelationReadOptions {
 	readonly tuples: readonly (readonly unknown[])[];
 	readonly executionContext?: ExecutionContext;
 	readonly limit: number;
+}
+
+interface ResolvedCrudScope extends Omit<CrudScopeResult, "facts"> {
+	readonly facts: CrudFacts;
 }
 
 /**
@@ -86,6 +102,7 @@ export class CrudService<
 		readonly options: ResolvedCrudModuleOptions,
 		readonly cursorCodec?: CrudCursorCodec,
 		readonly projections: readonly CrudProjection<Resource>[] = [],
+		readonly validators: readonly CrudMutationValidator<Resource>[] = [],
 	) {
 		this.resource = resource;
 		this.assertCapabilities();
@@ -100,13 +117,28 @@ export class CrudService<
 		const result = await this.runAdapter(async () =>
 			this.adapter.transaction(
 				async (session) => {
-					const context = this.operationContext("create", executionContext, session, pathParams);
-					const scope = await this.resolveScopes(context);
+					const scopeContext = this.operationContext(
+						"create",
+						executionContext,
+						session,
+						pathParams,
+					);
+					const scope = await this.resolveScopes(scopeContext);
+					const context = this.mutationContext(
+						"create",
+						session,
+						scope.facts,
+						executionContext,
+						pathParams,
+					);
 					let value = input;
 					for (const hook of this.hooks) {
 						if (hook.beforeCreate !== undefined) {
 							value = await hook.beforeCreate(value, context);
 						}
+					}
+					for (const validator of this.validators) {
+						await validator.validateCreate?.(value, context);
 					}
 					const mapped = await this.binding.mappings.create(value);
 					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
@@ -253,10 +285,21 @@ export class CrudService<
 					)!;
 					const prior = await this.adapter.findOne({ predicate }, this.adapterContext(baseContext));
 					if (prior === null) throw this.notFound();
-					const context = { ...baseContext, prior };
+					const context: CrudOperationContext<Resource> = {
+						...baseContext,
+						facts: scope.facts,
+						prior,
+					};
 					let value = input;
 					for (const hook of this.hooks) {
 						if (hook.beforeUpdate !== undefined) value = await hook.beforeUpdate(value, context);
+					}
+					for (const validator of this.validators) {
+						await validator.validateUpdate?.(
+							id,
+							value,
+							this.mutationContext("update", session, scope.facts, executionContext, pathParams),
+						);
 					}
 					const mapped = await this.binding.mappings.update(value);
 					const scoped = await this.binding.mappings.persistence(scope.updateValues ?? {});
@@ -299,8 +342,20 @@ export class CrudService<
 		const result = await this.runAdapter(() =>
 			adapter.transaction(
 				async (session) => {
-					const context = this.operationContext("upsert", executionContext, session, pathParams);
-					const scope = await this.resolveScopes(context);
+					const scopeContext = this.operationContext(
+						"upsert",
+						executionContext,
+						session,
+						pathParams,
+					);
+					const scope = await this.resolveScopes(scopeContext);
+					const context = this.mutationContext(
+						"upsert",
+						session,
+						scope.facts,
+						executionContext,
+						pathParams,
+					);
 					const predicate = andCrudPredicates(
 						this.idPredicate(id),
 						this.normalRowsPredicate(),
@@ -311,6 +366,9 @@ export class CrudService<
 						if (hook.beforeUpsert !== undefined) {
 							value = await hook.beforeUpsert(id, value, context);
 						}
+					}
+					for (const validator of this.validators) {
+						await validator.validateUpsert?.(id, value, context);
 					}
 					const mapped = await mapUpsert(id, value);
 					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
@@ -364,8 +422,18 @@ export class CrudService<
 					)!;
 					const prior = await this.adapter.findOne({ predicate }, this.adapterContext(baseContext));
 					if (prior === null) throw this.notFound();
-					const context = { ...baseContext, prior };
+					const context: CrudOperationContext<Resource> = {
+						...baseContext,
+						facts: scope.facts,
+						prior,
+					};
 					for (const hook of this.hooks) await hook.beforeDelete?.(context);
+					for (const validator of this.validators) {
+						await validator.validateDelete?.(
+							id,
+							this.mutationContext("delete", session, scope.facts, executionContext, pathParams),
+						);
+					}
 					const record =
 						this.resource.softDelete === undefined
 							? await this.adapter.delete({ predicate }, this.adapterContext(context))
@@ -418,8 +486,18 @@ export class CrudService<
 					)!;
 					const prior = await this.adapter.findOne({ predicate }, this.adapterContext(baseContext));
 					if (prior === null) throw this.notFound();
-					const context = { ...baseContext, prior };
+					const context: CrudOperationContext<Resource> = {
+						...baseContext,
+						facts: scope.facts,
+						prior,
+					};
 					for (const hook of this.hooks) await hook.beforeRestore?.(context);
+					for (const validator of this.validators) {
+						await validator.validateRestore?.(
+							id,
+							this.mutationContext("restore", session, scope.facts, executionContext, pathParams),
+						);
+					}
 					const value = softDelete.restoreValue?.(context) ?? null;
 					const persistenceValues = await this.binding.mappings.persistence({
 						[softDelete.field]: value,
@@ -747,19 +825,22 @@ export class CrudService<
 		}
 	}
 
-	private async resolveScopes(context: CrudOperationContext<Resource>): Promise<CrudScopeResult> {
+	private async resolveScopes(context: CrudOperationContext<Resource>): Promise<ResolvedCrudScope> {
 		const resolved = await Promise.all(this.scopes.map(async (scope) => scope.resolve(context)));
 		const predicate = andCrudPredicates(...resolved.map((result) => result.predicate));
 		const createValues: Record<string, unknown> = {};
 		const updateValues: Record<string, unknown> = {};
+		const factEntries: CrudFactEntry[] = [];
 		for (const result of resolved) {
 			if (result.createValues !== undefined) Object.assign(createValues, result.createValues);
 			if (result.updateValues !== undefined) Object.assign(updateValues, result.updateValues);
+			if (result.facts !== undefined) factEntries.push(...result.facts);
 		}
 		return {
 			...(predicate === undefined ? {} : { predicate }),
 			createValues,
 			updateValues,
+			facts: resolveCrudFacts(factEntries),
 		};
 	}
 
@@ -825,7 +906,7 @@ export class CrudService<
 	}
 
 	private scopeCreateValues(
-		scope: CrudScopeResult,
+		scope: Pick<ResolvedCrudScope, "createValues">,
 		pathParams: CrudPathParams<Resource> | undefined,
 	): Readonly<Record<string, unknown>> {
 		const values: Record<string, unknown> = { ...scope.createValues };
@@ -851,6 +932,24 @@ export class CrudService<
 			operation,
 			...(executionContext === undefined ? {} : { executionContext }),
 			...(session === undefined ? {} : { session }),
+			...(pathParams === undefined ? {} : { pathParams }),
+			facts: EMPTY_CRUD_FACTS,
+		};
+	}
+
+	private mutationContext<Operation extends MutationName>(
+		operation: Operation,
+		session: CrudAdapterSession,
+		facts: CrudFacts,
+		executionContext?: ExecutionContext,
+		pathParams?: CrudPathParams<Resource>,
+	): CrudValidationContext<Resource, Operation> {
+		return {
+			resource: this.resource,
+			operation,
+			session,
+			facts,
+			...(executionContext === undefined ? {} : { executionContext }),
 			...(pathParams === undefined ? {} : { pathParams }),
 		};
 	}

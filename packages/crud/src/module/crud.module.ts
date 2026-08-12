@@ -13,7 +13,12 @@ import { HmacSha256CrudCursorCodec } from "../cursor/hmac-sha256-cursor-codec.ts
 import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
 import { CrudRegistry } from "../runtime/crud-registry.ts";
 import { CrudService } from "../runtime/crud.service.ts";
-import type { CrudLifecycleHook, CrudProjection, CrudScope } from "../runtime/runtime.types.ts";
+import type {
+	CrudLifecycleHook,
+	CrudMutationValidator,
+	CrudProjection,
+	CrudScope,
+} from "../runtime/runtime.types.ts";
 import {
 	resolveCrudModuleOptions,
 	type CrudModuleOptions,
@@ -140,6 +145,7 @@ function featureProviders(
 	const hookTokens = resource.hooks ?? [];
 	const scopeTokens = resource.scopes ?? [];
 	const projectionTokens = resource.projections ?? [];
+	const validatorTokens = resource.validators ?? [];
 	return [
 		{ provide: bindingToken, useValue: binding },
 		adapterProvider(adapterToken, binding),
@@ -153,6 +159,7 @@ function featureProviders(
 				...hookTokens,
 				...scopeTokens,
 				...projectionTokens,
+				...validatorTokens,
 			],
 			useFactory: (...dependencies: readonly unknown[]): CrudService => {
 				const adapter = dependencies[0] as CrudAdapter;
@@ -169,9 +176,14 @@ function featureProviders(
 					scopeOffset,
 					scopeOffset + scopeTokens.length,
 				) as readonly CrudScope[];
+				const projectionOffset = scopeOffset + scopeTokens.length;
 				const projections = dependencies.slice(
-					scopeOffset + scopeTokens.length,
+					projectionOffset,
+					projectionOffset + projectionTokens.length,
 				) as readonly CrudProjection[];
+				const validators = dependencies.slice(
+					projectionOffset + projectionTokens.length,
+				) as readonly CrudMutationValidator[];
 				return new CrudService(
 					resource,
 					binding,
@@ -182,6 +194,7 @@ function featureProviders(
 					resolved,
 					cursor,
 					projections,
+					validators,
 				);
 			},
 		},

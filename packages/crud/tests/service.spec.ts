@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
+import { NotFoundException } from "@nestjs/common";
 
 import { defineCrudBinding } from "../src/adapter/binding.types.ts";
 import type { CrudAdapter } from "../src/adapter/adapter.types.ts";
@@ -9,7 +10,12 @@ import { defineCrudResource } from "../src/resource/define-resource.ts";
 import { crudOperations } from "../src/resource/operations.ts";
 import { CrudRegistry } from "../src/runtime/crud-registry.ts";
 import { CrudService } from "../src/runtime/crud.service.ts";
-import type { CrudLifecycleHook, CrudScope } from "../src/runtime/runtime.types.ts";
+import { defineCrudFact, provideCrudFact } from "../src/runtime/crud-facts.ts";
+import type {
+	CrudLifecycleHook,
+	CrudMutationValidator,
+	CrudScope,
+} from "../src/runtime/runtime.types.ts";
 import {
 	SOFT_DELETE_TIME,
 	compositeResource,
@@ -226,6 +232,227 @@ describe("CrudService cursor pagination", () => {
 });
 
 describe("CrudService transaction and lifecycle semantics", () => {
+	it("passes hook-transformed input and typed scope facts to ordered validators", async () => {
+		const parentFact = defineCrudFact<{ readonly id: string }>("authorized-parent");
+		const events: string[] = [];
+		const adapter = new FakeCrudAdapter([], {}, events);
+		const scope: CrudScope<typeof userResource> = {
+			resolve: (context) => {
+				events.push("scope");
+				expect(context.facts.has(parentFact)).toBe(false);
+				return { facts: [provideCrudFact(parentFact, { id: "parent-1" })] };
+			},
+		};
+		const hook: CrudLifecycleHook<typeof userResource> = {
+			beforeCreate: (input, context) => {
+				events.push("hook:beforeCreate");
+				expect(context.facts.require(parentFact)).toEqual({ id: "parent-1" });
+				return { ...input, name: input.name.toUpperCase() };
+			},
+			afterCreate: () => {
+				events.push("hook:afterCreate");
+			},
+			afterCommit: (event) => {
+				events.push("hook:afterCommit");
+				expect(event).not.toHaveProperty("facts");
+			},
+		};
+		const first: CrudMutationValidator<typeof userResource> = {
+			validateCreate: (input, context) => {
+				events.push("validator:first");
+				expect(input.name).toBe("CREATED");
+				expect(context.operation).toBe("create");
+				expect(context.session).toBeDefined();
+				expect(context.facts.require(parentFact).id).toBe("parent-1");
+			},
+		};
+		const second: CrudMutationValidator<typeof userResource> = {
+			validateCreate: () => {
+				events.push("validator:second");
+			},
+		};
+		const { service } = createUserService({
+			adapter,
+			hooks: [hook],
+			scopes: [scope],
+			validators: [first, second],
+		});
+
+		await expect(service.create({ name: "Created", tenantId: "tenant-a" })).resolves.toMatchObject({
+			name: "CREATED",
+		});
+		expect(events).toEqual([
+			"transaction:begin",
+			"scope",
+			"hook:beforeCreate",
+			"validator:first",
+			"validator:second",
+			"hook:afterCreate",
+			"transaction:commit",
+			"hook:afterCommit",
+		]);
+	});
+
+	it("fails closed and rolls back when scope facts are duplicate or missing", async () => {
+		const fact = defineCrudFact<string>("required-value");
+		const duplicate = createUserService({
+			scopes: [
+				{ resolve: () => ({ facts: [provideCrudFact(fact, "first")] }) },
+				{ resolve: () => ({ facts: [provideCrudFact(fact, "second")] }) },
+			],
+		});
+		await expect(
+			duplicate.service.create({ name: "Rejected", tenantId: "tenant-a" }),
+		).rejects.toMatchObject({ status: 500 });
+		expect(duplicate.adapter.snapshot()).toEqual([]);
+		expect(duplicate.adapter.events).toEqual(["transaction:begin", "transaction:rollback"]);
+
+		const missing = createUserService({
+			validators: [
+				{
+					validateCreate: (_input, context) => {
+						context.facts.require(fact);
+					},
+				},
+			],
+		});
+		await expect(
+			missing.service.create({ name: "Rejected", tenantId: "tenant-a" }),
+		).rejects.toMatchObject({ status: 500 });
+		expect(missing.adapter.snapshot()).toEqual([]);
+		expect(missing.adapter.events).toEqual(["transaction:begin", "transaction:rollback"]);
+	});
+
+	it("validates update, delete and restore after source visibility and before writes", async () => {
+		const deletedAt = new Date("2026-07-01T00:00:00.000Z");
+		const adapter = new FakeCrudAdapter([
+			{ id: 1, name: "Update", tenantId: "tenant-a", deletedAt: null },
+			{ id: 2, name: "Delete", tenantId: "tenant-a", deletedAt: null },
+			{ id: 3, name: "Restore", tenantId: "tenant-a", deletedAt },
+		]);
+		const lifecycle: string[] = [];
+		const hook: CrudLifecycleHook<typeof userResource> = {
+			beforeUpdate: (input) => (lifecycle.push("hook:update"), { ...input, name: "FINAL" }),
+			beforeDelete: () => {
+				lifecycle.push("hook:delete");
+			},
+			beforeRestore: () => {
+				lifecycle.push("hook:restore");
+			},
+		};
+		const validator: CrudMutationValidator<typeof userResource> = {
+			validateUpdate: (id, input, context) => {
+				lifecycle.push("validator:update");
+				expect(id).toEqual({ id: 1 });
+				expect(input.name).toBe("FINAL");
+				expect(context).toMatchObject({ operation: "update", session: expect.any(Object) });
+			},
+			validateDelete: (id, context) => {
+				lifecycle.push("validator:delete");
+				expect(id).toEqual({ id: 2 });
+				expect(context).toMatchObject({ operation: "delete", session: expect.any(Object) });
+			},
+			validateRestore: (id, context) => {
+				lifecycle.push("validator:restore");
+				expect(id).toEqual({ id: 3 });
+				expect(context).toMatchObject({ operation: "restore", session: expect.any(Object) });
+			},
+		};
+		const { service } = createUserService({ adapter, hooks: [hook], validators: [validator] });
+
+		await service.update({ id: 1 }, { name: "ignored" });
+		await service.delete({ id: 2 });
+		await service.restore({ id: 3 });
+		expect(lifecycle).toEqual([
+			"hook:update",
+			"validator:update",
+			"hook:delete",
+			"validator:delete",
+			"hook:restore",
+			"validator:restore",
+		]);
+		expect(adapter.snapshot()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: 1, name: "FINAL" }),
+				expect.objectContaining({ id: 2, deletedAt: SOFT_DELETE_TIME }),
+				expect.objectContaining({ id: 3, deletedAt: null }),
+			]),
+		);
+	});
+
+	it.each(["update", "delete", "restore"] as const)(
+		"returns 404 before %s validation when the source row is not visible",
+		async (operation) => {
+			const invoked = vi.fn();
+			const adapter = new FakeCrudAdapter([
+				{
+					id: 999,
+					name: "Scope hidden",
+					tenantId: "tenant-a",
+					deletedAt: operation === "restore" ? new Date("2026-07-01T00:00:00.000Z") : null,
+				},
+			]);
+			const { service } = createUserService({
+				adapter,
+				scopes: [
+					{
+						resolve: () => ({
+							predicate: {
+								kind: "comparison",
+								field: "tenantId",
+								operator: "eq",
+								value: "hidden-tenant",
+							},
+						}),
+					},
+				],
+				validators: [
+					{
+						validateUpdate: invoked,
+						validateDelete: invoked,
+						validateRestore: invoked,
+					},
+				],
+			});
+			const mutation =
+				operation === "update"
+					? service.update({ id: 999 }, { name: "hidden" })
+					: operation === "delete"
+						? service.delete({ id: 999 })
+						: service.restore({ id: 999 });
+
+			await expect(mutation).rejects.toMatchObject({ status: 404 });
+			expect(invoked).not.toHaveBeenCalled();
+		},
+	);
+
+	it("preserves a validator HTTP exception and short-circuits every later mutation phase", async () => {
+		const adapter = new FakeCrudAdapter();
+		const afterCreate = vi.fn();
+		const afterCommit = vi.fn();
+		const { service } = createUserService({
+			adapter,
+			hooks: [{ afterCreate, afterCommit }],
+			validators: [
+				{
+					validateCreate: () => {
+						throw new NotFoundException("referenced resource was not found");
+					},
+				},
+			],
+		});
+
+		await expect(service.create({ name: "Rejected", tenantId: "tenant-a" })).rejects.toMatchObject({
+			status: 404,
+			message: "referenced resource was not found",
+		});
+		expect(adapter.calls.create).toBe(0);
+		expect(adapter.snapshot()).toEqual([]);
+		expect(afterCreate).not.toHaveBeenCalled();
+		expect(afterCommit).not.toHaveBeenCalled();
+		expect(adapter.events).toEqual(["transaction:begin", "transaction:rollback"]);
+	});
+
 	it.each([
 		["conflict", 409, true],
 		["constraint", 400, false],
@@ -332,6 +559,32 @@ describe("CrudService transaction and lifecycle semantics", () => {
 });
 
 describe("CrudService atomic upsert", () => {
+	it("validates the full upsert id and hook-transformed input inside the transaction", async () => {
+		const events: string[] = [];
+		const adapter = new FakeCrudAdapter([], {}, events);
+		const validator: CrudMutationValidator<typeof viewerBindingResource> = {
+			validateUpsert: (id, input, context) => {
+				events.push("validator:upsert");
+				expect(id).toEqual({ artifactId: "artifact-1", serverId: "server-1" });
+				expect(input.toolPrefix).toBe("FINAL");
+				expect(context.session).toBeDefined();
+			},
+		};
+		const service = createViewerBindingService(
+			adapter,
+			[{ beforeUpsert: (_id, input) => ({ ...input, toolPrefix: "FINAL" }) }],
+			[viewerBindingScope()],
+			[validator],
+		);
+
+		await service.upsert(
+			{ artifactId: "artifact-1", serverId: "server-1" },
+			{ toolPrefix: "requested" },
+		);
+		expect(events).toContain("validator:upsert");
+		expect(adapter.snapshot()[0]).toMatchObject({ toolPrefix: "FINAL" });
+	});
+
 	it("uses one adapter upsert and dedicated hooks for insert and replacement", async () => {
 		const events: string[] = [];
 		const adapter = new FakeCrudAdapter([], {}, events);
@@ -348,7 +601,6 @@ describe("CrudService atomic upsert", () => {
 			afterUpsert: (_record, context) => {
 				events.push("hook:afterUpsert");
 				expect(context.session).toBeDefined();
-				expect(context.prior).toBeUndefined();
 			},
 			afterCommit: (event) => {
 				events.push("hook:afterCommit");
@@ -923,6 +1175,7 @@ function createViewerBindingService(
 	adapter: FakeCrudAdapter,
 	hooks: readonly CrudLifecycleHook<typeof viewerBindingResource>[] = [],
 	scopes: readonly CrudScope<typeof viewerBindingResource>[] = [],
+	validators: readonly CrudMutationValidator<typeof viewerBindingResource>[] = [],
 ) {
 	return new CrudService(
 		viewerBindingResource,
@@ -932,6 +1185,9 @@ function createViewerBindingService(
 		scopes,
 		new CrudRegistry(),
 		resolveCrudModuleOptions({}),
+		undefined,
+		[],
+		validators,
 	);
 }
 

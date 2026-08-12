@@ -54,6 +54,16 @@ service providers, imports, and service exports while generating no controllers.
   `createValues` apply only to inserts; a scope must opt into update overwrites
   with distinct `updateValues`. Before/after mutation hooks run in the
   transaction; `afterCommit` failures go to the configured error sink.
+- Mutation `validators` are injected in declaration order and run inside the
+  adapter-owned transaction after `beforeCreate`, `beforeUpdate`, or
+  `beforeUpsert` has produced the final domain input and after an existing
+  update/delete/restore row is visible. Their operation-specific context has a
+  required active adapter session; throwing aborts and rolls back the mutation.
+- Scopes can publish typed transaction facts with `defineCrudFact()` and
+  `provideCrudFact()`. Later hooks and validators read them through the
+  context's immutable `facts` accessor. A missing required fact or duplicate
+  fact identity fails closed with `500`; facts are never included in
+  `afterCommit` events.
 - Binding `scopeCreateFields` declares adapter insert fields supplied by scopes
   or nested paths through `mappings.scopeCreate`. Only declared fields may be omitted by
   `mappings.create`; missing declared values fail closed before adapter create.

@@ -4,7 +4,11 @@ import { defineCrudBinding } from "../../src/adapter/binding.types.ts";
 import { resolveCrudModuleOptions } from "../../src/module/crud-module.options.ts";
 import { defineCrudResource } from "../../src/resource/define-resource.ts";
 import { crudOperations } from "../../src/resource/operations.ts";
-import type { CrudLifecycleHook, CrudScope } from "../../src/runtime/runtime.types.ts";
+import type {
+	CrudLifecycleHook,
+	CrudMutationValidator,
+	CrudScope,
+} from "../../src/runtime/runtime.types.ts";
 import { CrudRegistry } from "../../src/runtime/crud-registry.ts";
 import { CrudService } from "../../src/runtime/crud.service.ts";
 import { FakeCrudAdapter, type FakeRecord } from "./fake-crud-adapter.ts";
@@ -85,6 +89,7 @@ export interface CreateUserServiceOptions {
 	readonly adapter?: FakeCrudAdapter;
 	readonly hooks?: readonly CrudLifecycleHook<typeof userResource>[];
 	readonly scopes?: readonly CrudScope<typeof userResource>[];
+	readonly validators?: readonly CrudMutationValidator<typeof userResource>[];
 	readonly registry?: CrudRegistry;
 	readonly afterCommitErrorHandler?: Parameters<
 		typeof resolveCrudModuleOptions
@@ -108,6 +113,9 @@ export function createUserService(options: CreateUserServiceOptions = {}) {
 		options.scopes ?? [],
 		registry,
 		resolved,
+		undefined,
+		[],
+		options.validators ?? [],
 	);
 	return { adapter, binding, registry, service };
 }

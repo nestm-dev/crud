@@ -15,6 +15,7 @@ import {
 	Brackets,
 	QueryFailedError,
 	type DeepPartial,
+	type EntityTarget,
 	type EntityMetadata,
 	type EntityManager,
 	type FindOptionsSelect,
@@ -93,6 +94,8 @@ export type TypeOrmCrudRecord<
 
 /** The alias every generated statement selects the resource's rows under. */
 export const TYPEORM_CRUD_ALIAS = "crud_record";
+/** The alias transaction-scoped reference lookups select their target rows under. */
+export const TYPEORM_CRUD_REFERENCE_ALIAS = "crud_reference";
 
 export type TypeOrmCrudTransactionAccessMode = "read only" | "read write";
 export type TypeOrmCrudTransactionIsolationLevel = "read committed" | "repeatable read";
@@ -152,6 +155,63 @@ export interface TypeOrmCrudRowPredicateOptions<RecordType extends ObjectLiteral
 	readonly transaction?: Pick<TypeOrmCrudTransactionRequirements, "isolationLevel">;
 }
 
+/** Minimum context needed to reuse an active CRUD mutation transaction. */
+export interface TypeOrmCrudReferenceContext {
+	readonly session: CrudAdapterSession;
+}
+
+export interface TypeOrmCrudReferencePredicateContext<
+	EntityType extends ObjectLiteral,
+	Context extends TypeOrmCrudReferenceContext = TypeOrmCrudReferenceContext,
+> {
+	/** Repository rebound to the source CRUD operation's active entity manager. */
+	readonly repository: Repository<EntityType>;
+	/** Alias used by the reference lookup's select query. */
+	readonly alias: string;
+	/** The original validation context, including its typed operation facts. */
+	readonly context: Context;
+}
+
+/** Native target-row constraint applied in addition to a neutral CRUD predicate. */
+export type TypeOrmCrudReferencePredicate<
+	EntityType extends ObjectLiteral,
+	Context extends TypeOrmCrudReferenceContext = TypeOrmCrudReferenceContext,
+> = (
+	context: TypeOrmCrudReferencePredicateContext<EntityType, Context>,
+) => Brackets | Promise<Brackets>;
+
+interface TypeOrmCrudReferenceInputBase<
+	EntityType extends ObjectLiteral,
+	Context extends TypeOrmCrudReferenceContext,
+> {
+	/** Neutral predicate whose fields resolve through the checker's logical column map. */
+	readonly predicate?: CrudFindOneInput["predicate"];
+	/** Native constraint for target-specific SQL or an RLS companion predicate. */
+	readonly nativePredicate?: TypeOrmCrudReferencePredicate<EntityType, Context>;
+}
+
+/**
+ * A reference lookup is never unconstrained: every call must provide a neutral
+ * predicate, a native predicate, or both.
+ */
+export type TypeOrmCrudReferenceInput<
+	EntityType extends ObjectLiteral,
+	Context extends TypeOrmCrudReferenceContext = TypeOrmCrudReferenceContext,
+> =
+	| (TypeOrmCrudReferenceInputBase<EntityType, Context> & {
+			readonly predicate: CrudFindOneInput["predicate"];
+	  })
+	| (TypeOrmCrudReferenceInputBase<EntityType, Context> & {
+			readonly nativePredicate: TypeOrmCrudReferencePredicate<EntityType, Context>;
+	  });
+
+export interface TypeOrmCrudReferenceCheckerOptions<EntityType extends ObjectLiteral> {
+	/** Target metadata only; lookups acquire its repository from the active source manager. */
+	readonly target: EntityTarget<EntityType>;
+	/** Maps reference-predicate logical fields to target entity scalar property paths. */
+	readonly columns: Readonly<Record<string, string>>;
+}
+
 export interface TypeOrmCrudAdapterOptions<RecordType extends ObjectLiteral> {
 	/** A repository owned and lifecycle-managed by the consuming application. */
 	readonly repository: Repository<RecordType>;
@@ -180,6 +240,16 @@ interface TypeOrmSessionState {
 	readonly manager: EntityManager;
 	readonly transaction: TypeOrmCrudEffectiveTransaction;
 }
+
+/**
+ * Active TypeORM sessions keyed by the exact opaque object handed to CRUD work.
+ *
+ * This registry deliberately lives at package scope instead of on one adapter
+ * instance. A reference lookup is issued by the source resource's validator but
+ * targets a different entity, so it must reuse the source adapter's manager without
+ * pretending that the target resource owns or can join that adapter's session.
+ */
+const activeTypeOrmSessions = new WeakMap<CrudAdapterSession, TypeOrmSessionState>();
 
 function sqlState(error: PostgreSqlError): string | undefined {
 	return typeof error.code === "string" && /^[0-9A-Z]{5}$/.test(error.code)
@@ -402,6 +472,135 @@ function resolveEffectiveTransaction(
 		);
 	}
 	return Object.freeze({ ...effective });
+}
+
+function activeTypeOrmSession(context: {
+	readonly session?: CrudAdapterSession;
+}): TypeOrmSessionState {
+	const session = context.session;
+	const state = session === undefined ? undefined : activeTypeOrmSessions.get(session);
+	if (state === undefined) {
+		throw new CrudAdapterError(
+			"unknown",
+			"A TypeORM reference lookup requires an active TypeORM CRUD transaction session.",
+		);
+	}
+	if (state.transaction.accessMode !== "read write") {
+		throw new CrudAdapterError(
+			"unsupported",
+			"A locked TypeORM reference lookup requires a read-write transaction.",
+		);
+	}
+	return state;
+}
+
+/**
+ * Checks a target row through the source CRUD mutation's active TypeORM transaction.
+ *
+ * The checker owns neither a repository nor a transaction. It rebinds `target` through
+ * the active source manager, applies an explicit predicate, and takes a shared
+ * row lock. The query selects only a constant and uses a raw result, so TypeORM never
+ * hydrates the target entity or invokes its transformers and `@AfterLoad` lifecycle.
+ */
+export class TypeOrmCrudReferenceChecker<EntityType extends ObjectLiteral> {
+	readonly #target: EntityTarget<EntityType>;
+	readonly #columns: Readonly<Record<string, string>>;
+	readonly #validatedMetadata = new WeakSet<EntityMetadata>();
+
+	constructor(options: TypeOrmCrudReferenceCheckerOptions<EntityType>) {
+		this.#target = options.target;
+		this.#columns = Object.freeze({ ...options.columns });
+	}
+
+	async exists<Context extends TypeOrmCrudReferenceContext>(
+		input: TypeOrmCrudReferenceInput<EntityType, Context>,
+		context: Context,
+	): Promise<boolean> {
+		try {
+			if (input.predicate === undefined && input.nativePredicate === undefined) {
+				throw new CrudAdapterError(
+					"unsupported",
+					"A TypeORM CRUD reference lookup requires an explicit predicate.",
+				);
+			}
+
+			const state = activeTypeOrmSession(context);
+			const repository = state.manager.getRepository(this.#target);
+			this.#validateMetadata(repository.metadata);
+
+			const query = repository.createQueryBuilder(TYPEORM_CRUD_REFERENCE_ALIAS);
+			query.select("1", "crud_reference_exists");
+
+			let nativeParameters: Readonly<Record<string, unknown>> | undefined;
+			if (input.nativePredicate !== undefined) {
+				const nativePredicate = await input.nativePredicate({
+					repository,
+					alias: query.alias,
+					context,
+				});
+				if (!(nativePredicate instanceof Brackets)) {
+					throw new CrudAdapterError(
+						"unknown",
+						"The TypeORM CRUD reference predicate did not return a Brackets expression.",
+					);
+				}
+				query.andWhere(nativePredicate);
+				nativeParameters = query.getParameters();
+			}
+
+			if (input.predicate !== undefined) {
+				const compiled = compileTypeOrmPredicate(input.predicate, (field) =>
+					this.#fieldExpression(query, field),
+				);
+				for (const parameter of Object.keys(compiled.parameters)) {
+					if (nativeParameters !== undefined && Object.hasOwn(nativeParameters, parameter)) {
+						throw new CrudAdapterError(
+							"unknown",
+							`The TypeORM CRUD reference predicate collides with reserved CRUD parameter '${parameter}'.`,
+						);
+					}
+				}
+				query.andWhere(compiled.sql, compiled.parameters);
+			}
+
+			query.take(1).setLock("pessimistic_read", undefined, [query.alias]);
+			const found: unknown = await query.getRawOne();
+			return found !== undefined && found !== null;
+		} catch (error) {
+			throw databaseError(error);
+		}
+	}
+
+	#validateMetadata(metadata: EntityMetadata): void {
+		if (this.#validatedMetadata.has(metadata)) return;
+
+		for (const [field, propertyPath] of Object.entries(this.#columns)) {
+			const column = metadata.findColumnWithPropertyPathStrict(propertyPath);
+			if (column === undefined || column.isVirtual || column.isVirtualProperty) {
+				throw new TypeError(
+					`CRUD reference field '${field}' maps to unknown scalar TypeORM property '${propertyPath}'.`,
+				);
+			}
+		}
+		this.#validatedMetadata.add(metadata);
+	}
+
+	#fieldExpression(query: SelectQueryBuilder<EntityType>, field: string): string {
+		const propertyPath = this.#columns[field];
+		if (propertyPath === undefined) {
+			throw new CrudAdapterError(
+				"unsupported",
+				`The TypeORM CRUD reference checker does not map field '${field}'.`,
+			);
+		}
+		return `${query.alias}.${propertyPath}`;
+	}
+}
+
+export function createTypeOrmCrudReferenceChecker<EntityType extends ObjectLiteral>(
+	options: TypeOrmCrudReferenceCheckerOptions<EntityType>,
+): TypeOrmCrudReferenceChecker<EntityType> {
+	return new TypeOrmCrudReferenceChecker(options);
 }
 
 export class TypeOrmCrudAdapter<
@@ -821,10 +1020,16 @@ export class TypeOrmCrudAdapter<
 				manager,
 				transaction: resolveEffectiveTransaction(requirements, reportedTransaction),
 			};
+			const session: CrudAdapterSession = Object.freeze({
+				adapter: this.#sessionMarker,
+				value: state,
+			});
 			this.#activeSessions.add(state);
+			activeTypeOrmSessions.set(session, state);
 			try {
-				return await work({ adapter: this.#sessionMarker, value: state });
+				return await work(session);
 			} finally {
+				activeTypeOrmSessions.delete(session);
 				this.#activeSessions.delete(state);
 			}
 		};

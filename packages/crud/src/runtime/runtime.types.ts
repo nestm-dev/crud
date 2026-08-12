@@ -12,6 +12,7 @@ import type {
 	CrudUpsert,
 } from "../resource/resource.types.ts";
 import type { CrudOperationName } from "../resource/operations.ts";
+import type { CrudFactEntry, CrudFacts } from "./crud-facts.ts";
 
 /** Arguments following a collection payload/query in direct CrudService calls. */
 type CrudFlatCollectionArgs = readonly [executionContext?: ExecutionContext];
@@ -35,6 +36,52 @@ export interface CrudOperationContext<Resource extends AnyCrudResource = AnyCrud
 	readonly session?: CrudAdapterSession;
 	readonly prior?: unknown;
 	readonly pathParams?: CrudPathParams<Resource>;
+	/** Transaction-local values resolved by scopes; empty while scopes themselves run. */
+	readonly facts: CrudFacts;
+}
+
+type CrudMutationOperation = Extract<
+	CrudOperationName,
+	"create" | "update" | "delete" | "restore" | "upsert"
+>;
+
+type CrudValidationContextBase<
+	Resource extends AnyCrudResource,
+	Operation extends CrudMutationOperation,
+> = Omit<CrudOperationContext<Resource>, "operation" | "session" | "prior"> & {
+	readonly operation: Operation;
+	readonly session: CrudAdapterSession;
+};
+
+/** Discriminated, transaction-bound context passed to mutation validators. */
+export type CrudValidationContext<
+	Resource extends AnyCrudResource = AnyCrudResource,
+	Operation extends CrudMutationOperation = CrudMutationOperation,
+> = CrudValidationContextBase<Resource, Operation>;
+
+export interface CrudMutationValidator<Resource extends AnyCrudResource = AnyCrudResource> {
+	validateCreate?(
+		input: CrudCreate<Resource>,
+		context: CrudValidationContext<Resource, "create">,
+	): void | Promise<void>;
+	validateUpdate?(
+		id: CrudId<Resource>,
+		input: CrudUpdate<Resource>,
+		context: CrudValidationContext<Resource, "update">,
+	): void | Promise<void>;
+	validateUpsert?(
+		id: CrudId<Resource>,
+		input: CrudUpsert<Resource>,
+		context: CrudValidationContext<Resource, "upsert">,
+	): void | Promise<void>;
+	validateDelete?(
+		id: CrudId<Resource>,
+		context: CrudValidationContext<Resource, "delete">,
+	): void | Promise<void>;
+	validateRestore?(
+		id: CrudId<Resource>,
+		context: CrudValidationContext<Resource, "restore">,
+	): void | Promise<void>;
 }
 
 export interface CrudLifecycleHook<Resource extends AnyCrudResource = AnyCrudResource> {
@@ -118,6 +165,8 @@ export interface CrudScopeResult {
 	 * Unlike `createValues`, these values may overwrite API-mapped update fields.
 	 */
 	readonly updateValues?: CrudValues;
+	/** Typed values made available to hooks and mutation validators in this transaction. */
+	readonly facts?: readonly CrudFactEntry[];
 }
 
 export interface CrudScope<Resource extends AnyCrudResource = AnyCrudResource> {
