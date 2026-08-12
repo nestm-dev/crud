@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import type { ExecutionContext } from "@nestjs/common";
 
 import type { CrudAdapter } from "../src/adapter/adapter.types.ts";
 import { defineCrudBinding, type CrudResourceBinding } from "../src/adapter/binding.types.ts";
@@ -12,10 +13,16 @@ import type {
 	AnyCrudResource,
 	CrudCreate,
 	CrudId,
+	CrudPathParams,
 	CrudResponse,
 	CrudUpdate,
+	CrudUpsert,
 } from "../src/resource/resource.types.ts";
-import type { CrudLifecycleHook, CrudScope } from "../src/runtime/runtime.types.ts";
+import type {
+	CrudCollectionArgs,
+	CrudLifecycleHook,
+	CrudScope,
+} from "../src/runtime/runtime.types.ts";
 import { FakeCrudAdapter } from "./support/fake-crud-adapter.ts";
 
 export const typedResource = defineCrudResource({
@@ -53,6 +60,73 @@ export type ResponseInference = Assert<
 	Equal<
 		CrudResponse<typeof typedResource>,
 		{ tenantId: string; id: number; label: string; count: number }
+	>
+>;
+export type FlatPathParamsInference = Assert<Equal<CrudPathParams<typeof typedResource>, never>>;
+export type ErasedPathParamsInference = Assert<
+	Equal<CrudPathParams<AnyCrudResource>, Readonly<Record<string, unknown>>>
+>;
+
+export const nestedTypedResource = defineCrudResource({
+	name: "typed-children",
+	path: "parents/:parentId/children",
+	itemPath: ":childId",
+	idFields: { parentId: "parentId", childId: "childId" },
+	pathParams: {
+		contract: z.object({ parentId: z.string().uuid() }),
+		fields: { parentId: "parentId" },
+	},
+	contracts: {
+		id: z.object({ parentId: z.string().uuid(), childId: z.coerce.number().int() }),
+		create: z.object({ label: z.string() }),
+		update: z.object({ label: z.string().optional() }),
+		upsert: z.object({ label: z.string(), enabled: z.boolean().default(true) }),
+		response: z.object({ parentId: z.string().uuid(), childId: z.number(), label: z.string() }),
+	},
+	operations: crudOperations.only("create", "list", "read", "upsert"),
+});
+
+export type NestedPathParamsInference = Assert<
+	Equal<CrudPathParams<typeof nestedTypedResource>, { parentId: string }>
+>;
+export type MixedPathParamsInference = Assert<
+	Equal<
+		CrudPathParams<typeof typedResource | typeof nestedTypedResource>,
+		Readonly<Record<string, unknown>>
+	>
+>;
+export type UpsertInference = Assert<
+	Equal<CrudUpsert<typeof nestedTypedResource>, { label: string; enabled: boolean }>
+>;
+export type MissingUpsertInference = Assert<Equal<CrudUpsert<typeof typedResource>, never>>;
+export type ErasedUpsertInference = Assert<Equal<CrudUpsert<AnyCrudResource>, never>>;
+export type MixedUpsertInference = Assert<
+	Equal<CrudUpsert<typeof typedResource | typeof nestedTypedResource>, unknown>
+>;
+type FlatCollectionArguments = readonly [executionContext?: ExecutionContext];
+type ErasedNestedCollectionArguments = readonly [
+	pathParams: Readonly<Record<string, unknown>>,
+	executionContext?: ExecutionContext,
+];
+export type FlatCollectionArgsInference = Assert<
+	Equal<CrudCollectionArgs<typeof typedResource>, FlatCollectionArguments>
+>;
+export type NestedCollectionArgsInference = Assert<
+	Equal<
+		CrudCollectionArgs<typeof nestedTypedResource>,
+		readonly [pathParams: { parentId: string }, executionContext?: ExecutionContext]
+	>
+>;
+export type ErasedCollectionArgsInference = Assert<
+	Equal<
+		CrudCollectionArgs<AnyCrudResource>,
+		FlatCollectionArguments | ErasedNestedCollectionArguments
+	>
+>;
+export type MixedCollectionArgsInference = Assert<
+	Equal<
+		CrudCollectionArgs<typeof typedResource | typeof nestedTypedResource>,
+		FlatCollectionArguments | ErasedNestedCollectionArguments
 	>
 >;
 
@@ -354,6 +428,110 @@ const unknownIdResource = defineCrudResource({
 });
 
 void unknownIdResource;
+
+const missingPathParamsDefinition = {
+	...typedResource,
+	name: "missing-path-params",
+	path: "parents/:parentId/children",
+	itemPath: ":id",
+	idFields: { parentId: "tenantId", id: "id" },
+} as const;
+// @ts-expect-error literal nested paths require an explicit pathParams configuration.
+const missingPathParamsResource = defineCrudResource(missingPathParamsDefinition);
+
+const unexpectedPathParamsDefinition = {
+	...typedResource,
+	pathParams: {
+		contract: z.object({ tenantId: z.string() }),
+		fields: { tenantId: "tenantId" },
+	},
+} as const;
+// @ts-expect-error flat collection paths cannot declare pathParams.
+const unexpectedPathParamsResource = defineCrudResource(unexpectedPathParamsDefinition);
+
+// @ts-expect-error pathParams contract keys must exactly match its field mappings.
+const mismatchedPathParamsContractResource = defineCrudResource({
+	...nestedTypedResource,
+	name: "mismatched-parent-contract",
+	pathParams: {
+		contract: z.object({ organizationId: z.string().uuid() }),
+		fields: { parentId: "parentId" },
+	},
+});
+
+// @ts-expect-error every path parameter must be required in the pathParams contract output.
+const optionalPathParamResource = defineCrudResource({
+	...nestedTypedResource,
+	name: "optional-parent-param",
+	pathParams: {
+		contract: z.object({ parentId: z.string().uuid().optional() }),
+		fields: { parentId: "parentId" },
+	},
+});
+
+// @ts-expect-error parent and item route parameter names must be disjoint.
+const overlappingPathParamResource = defineCrudResource({
+	...nestedTypedResource,
+	name: "overlapping-parent-param",
+	itemPath: ":parentId",
+	idFields: { parentId: "parentId" },
+	contracts: {
+		...nestedTypedResource.contracts,
+		id: z.object({ parentId: z.string().uuid() }),
+	},
+});
+
+const nonCanonicalPathParamDefinition = {
+	...nestedTypedResource,
+	name: "non-canonical-parent-param",
+	path: "parents/:parentId?/children",
+} as const;
+// @ts-expect-error route parameters must be canonical whole :identifier segments.
+const nonCanonicalPathParamResource = defineCrudResource(nonCanonicalPathParamDefinition);
+
+const duplicatePathParamDefinition = {
+	...nestedTypedResource,
+	name: "duplicate-parent-param",
+	path: "parents/:parentId/ancestors/:parentId/children",
+} as const;
+// @ts-expect-error parent route parameter names must be unique.
+const duplicatePathParamResource = defineCrudResource(duplicatePathParamDefinition);
+
+// @ts-expect-error parent mappings must be identical in pathParams.fields and idFields.
+const mismatchedPathParamMappingResource = defineCrudResource({
+	...nestedTypedResource,
+	name: "mismatched-parent-mapping",
+	idFields: { parentId: "ownerId", childId: "childId" },
+});
+
+const mismatchedPathParamTypeDefinition = {
+	...nestedTypedResource,
+	name: "mismatched-parent-type",
+	pathParams: {
+		contract: z.object({ parentId: z.coerce.number().int() }),
+		fields: { parentId: "parentId" },
+	},
+} as const;
+// @ts-expect-error parent path contract property types must match contracts.id output properties.
+const mismatchedPathParamTypeResource = defineCrudResource(mismatchedPathParamTypeDefinition);
+
+// @ts-expect-error enabling generated upsert requires contracts.upsert.
+const missingUpsertContractResource = defineCrudResource({
+	...typedResource,
+	name: "missing-upsert-contract",
+	operations: { upsert: {} },
+});
+
+void missingPathParamsResource;
+void unexpectedPathParamsResource;
+void mismatchedPathParamsContractResource;
+void optionalPathParamResource;
+void overlappingPathParamResource;
+void nonCanonicalPathParamResource;
+void duplicatePathParamResource;
+void mismatchedPathParamMappingResource;
+void mismatchedPathParamTypeResource;
+void missingUpsertContractResource;
 
 // @ts-expect-error create output is inferred as a number after schema coercion.
 export const invalidCreate: CrudCreate<typeof typedResource> = { label: "wrong", count: "1" };

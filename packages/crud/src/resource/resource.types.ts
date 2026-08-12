@@ -20,11 +20,21 @@ export interface CrudContracts<
 	Create extends CrudSchemaSource = CrudSchemaSource,
 	Update extends CrudSchemaSource = CrudSchemaSource,
 	Response extends CrudSchemaSource = CrudSchemaSource,
+	Upsert extends CrudSchemaSource = CrudSchemaSource,
 > {
 	readonly id: Id;
 	readonly create: Create;
 	readonly update: Update;
 	readonly response: Response;
+	readonly upsert?: Upsert;
+}
+
+export interface CrudPathParamsConfig<
+	Contract extends CrudSchemaSource = CrudSchemaSource,
+	Fields extends Readonly<Record<string, string>> = Readonly<Record<string, string>>,
+> {
+	readonly contract: Contract;
+	readonly fields: Fields;
 }
 
 export interface CrudSoftDeleteConfig {
@@ -45,12 +55,15 @@ export interface CrudResourceDefinition<
 	Relations extends Readonly<Record<string, CrudRelationConfig>> = Readonly<
 		Record<string, CrudRelationConfig>
 	>,
+	PathParams extends CrudPathParamsConfig | undefined = CrudPathParamsConfig | undefined,
+	Upsert extends CrudSchemaSource = CrudSchemaSource,
 > {
 	readonly name: Name;
 	readonly path: Path;
 	readonly itemPath: string;
 	readonly idFields: Readonly<Record<string, string>>;
-	readonly contracts: CrudContracts<Id, Create, Update, Response>;
+	readonly pathParams?: PathParams;
+	readonly contracts: CrudContracts<Id, Create, Update, Response, Upsert>;
 	readonly operations: CrudOperations;
 	readonly query?: CrudQueryConfig;
 	readonly softDelete?: CrudSoftDeleteConfig;
@@ -78,7 +91,19 @@ export interface CrudResource<
 	Relations extends Readonly<Record<string, CrudRelationConfig>> = Readonly<
 		Record<string, CrudRelationConfig>
 	>,
-> extends CrudResourceDefinition<Name, Path, Id, Create, Update, Response, Relations> {
+	PathParams extends CrudPathParamsConfig | undefined = CrudPathParamsConfig | undefined,
+	Upsert extends CrudSchemaSource = CrudSchemaSource,
+> extends CrudResourceDefinition<
+	Name,
+	Path,
+	Id,
+	Create,
+	Update,
+	Response,
+	Relations,
+	PathParams,
+	Upsert
+> {
 	readonly [CRUD_RESOURCE]: true;
 }
 
@@ -113,6 +138,127 @@ type SameKeys<Left, Right> = [Exclude<Left, Right>, Exclude<Right, Left>] extend
 	? true
 	: false;
 
+type SameValue<Left, Right> = [Left, Right] extends [Right, Left] ? true : false;
+
+type SameType<Left, Right> =
+	(<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+		? (<Value>() => Value extends Right ? 1 : 2) extends <Value>() => Value extends Left ? 1 : 2
+			? true
+			: false
+		: false;
+
+type IdentifierStart =
+	| "_"
+	| "A"
+	| "B"
+	| "C"
+	| "D"
+	| "E"
+	| "F"
+	| "G"
+	| "H"
+	| "I"
+	| "J"
+	| "K"
+	| "L"
+	| "M"
+	| "N"
+	| "O"
+	| "P"
+	| "Q"
+	| "R"
+	| "S"
+	| "T"
+	| "U"
+	| "V"
+	| "W"
+	| "X"
+	| "Y"
+	| "Z"
+	| "a"
+	| "b"
+	| "c"
+	| "d"
+	| "e"
+	| "f"
+	| "g"
+	| "h"
+	| "i"
+	| "j"
+	| "k"
+	| "l"
+	| "m"
+	| "n"
+	| "o"
+	| "p"
+	| "q"
+	| "r"
+	| "s"
+	| "t"
+	| "u"
+	| "v"
+	| "w"
+	| "x"
+	| "y"
+	| "z";
+
+type IdentifierCharacter =
+	IdentifierStart | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+
+type IsIdentifierRest<Value extends string> = Value extends ""
+	? true
+	: Value extends `${infer Character}${infer Rest}`
+		? Character extends IdentifierCharacter
+			? IsIdentifierRest<Rest>
+			: false
+		: false;
+
+type IsIdentifier<Value extends string> = Value extends `${infer First}${infer Rest}`
+	? First extends IdentifierStart
+		? IsIdentifierRest<Rest>
+		: false
+	: false;
+
+type IsCanonicalPathSegment<Segment extends string> = Segment extends `:${infer Parameter}`
+	? IsIdentifier<Parameter>
+	: Segment extends `${string}:${string}` | `${string}*${string}`
+		? false
+		: true;
+
+type IsCanonicalPath<Path extends string> = string extends Path
+	? true
+	: Path extends `${infer Segment}/${infer Rest}`
+		? IsCanonicalPathSegment<Segment> extends true
+			? IsCanonicalPath<Rest>
+			: false
+		: IsCanonicalPathSegment<Path>;
+
+type PathParameterTuple<Path extends string> = string extends Path
+	? readonly string[]
+	: Path extends `${infer Segment}/${infer Rest}`
+		? Segment extends `:${infer Parameter}`
+			? readonly [Parameter, ...PathParameterTuple<Rest>]
+			: PathParameterTuple<Rest>
+		: Path extends `:${infer Parameter}`
+			? readonly [Parameter]
+			: readonly [];
+
+type HasDuplicateValues<Values extends readonly unknown[], Seen = never> = Values extends readonly [
+	infer Value,
+	...infer Rest,
+]
+	? Value extends Seen
+		? true
+		: HasDuplicateValues<Rest, Seen | Value>
+	: false;
+
+type MappedFieldTuple<
+	Parameters extends readonly string[],
+	Fields extends Readonly<Record<string, string>>,
+> = Parameters extends readonly [infer Parameter extends string, ...infer Rest extends string[]]
+	? readonly [Fields[Parameter & keyof Fields], ...MappedFieldTuple<Rest, Fields>]
+	: readonly [];
+
 type CrudIdObjectConstraint<Definition extends CrudResourceDefinition, Output extends object> = [
 	Output,
 ] extends [readonly unknown[]]
@@ -121,19 +267,11 @@ type CrudIdObjectConstraint<Definition extends CrudResourceDefinition, Output ex
 		? CrudResourceTypeError<"contracts.id must output an object with finite parameter keys">
 		: OptionalKeys<Output> extends never
 			? SameKeys<keyof Output, keyof Definition["idFields"]> extends true
-				? string extends Definition["itemPath"]
-					? unknown
-					: SameKeys<
-								PathParameters<Definition["itemPath"]>,
-								keyof Definition["idFields"]
-						  > extends true
-						? unknown
-						: CrudResourceTypeError<"itemPath parameters must match idFields keys">
+				? unknown
 				: CrudResourceTypeError<"contracts.id output keys must match idFields keys">
 			: CrudResourceTypeError<"contracts.id output parameters must all be required">;
 
-/** Compile-time constraints applied to literal definitions by `defineCrudResource`. */
-export type CrudResourceDefinitionConstraint<Definition extends CrudResourceDefinition> =
+type CrudIdContractConstraint<Definition extends CrudResourceDefinition> =
 	SchemaOutput<Definition["contracts"]["id"]> extends infer Output
 		? IsAny<Output> extends true
 			? CrudResourceTypeError<"contracts.id output must be statically known">
@@ -146,6 +284,125 @@ export type CrudResourceDefinitionConstraint<Definition extends CrudResourceDefi
 					: CrudResourceTypeError<"contracts.id must output a parameter object">
 		: never;
 
+type CrudRouteSyntaxConstraint<Definition extends CrudResourceDefinition> =
+	IsCanonicalPath<Definition["path"]> extends true
+		? IsCanonicalPath<Definition["itemPath"]> extends true
+			? string extends Definition["path"]
+				? unknown
+				: HasDuplicateValues<PathParameterTuple<Definition["path"]>> extends true
+					? CrudResourceTypeError<"path route parameters must be unique">
+					: string extends Definition["itemPath"]
+						? unknown
+						: HasDuplicateValues<PathParameterTuple<Definition["itemPath"]>> extends true
+							? CrudResourceTypeError<"itemPath route parameters must be unique">
+							: Extract<
+										PathParameters<Definition["path"]>,
+										PathParameters<Definition["itemPath"]>
+								  > extends never
+								? SameKeys<
+										PathParameters<Definition["path"]> | PathParameters<Definition["itemPath"]>,
+										keyof Definition["idFields"]
+									> extends true
+									? unknown
+									: CrudResourceTypeError<"full route parameters must match idFields keys">
+								: CrudResourceTypeError<"path and itemPath parameters must be disjoint">
+			: CrudResourceTypeError<"itemPath parameters must use canonical :identifier segments">
+		: CrudResourceTypeError<"path parameters must use canonical :identifier segments">;
+
+type CrudPathParamPresenceConstraint<Definition extends CrudResourceDefinition> =
+	string extends Definition["path"]
+		? unknown
+		: PathParameters<Definition["path"]> extends never
+			? Definition extends { readonly pathParams: CrudPathParamsConfig }
+				? CrudResourceTypeError<"pathParams cannot be declared when path has no parameters">
+				: unknown
+			: Definition extends { readonly pathParams: CrudPathParamsConfig }
+				? unknown
+				: CrudResourceTypeError<"pathParams is required when path has parameters">;
+
+type CrudPathParamTypesConstraint<
+	Definition extends CrudResourceDefinition,
+	Config extends CrudPathParamsConfig,
+	Output extends object,
+> =
+	SchemaOutput<Definition["contracts"]["id"]> extends infer IdOutput
+		? IsAny<IdOutput> extends true
+			? unknown
+			: unknown extends IdOutput
+				? unknown
+				: [IdOutput] extends [object]
+					? false extends {
+							[Parameter in keyof Config["fields"]]: Parameter extends keyof Output
+								? Parameter extends keyof Extract<IdOutput, object>
+									? SameType<Pick<Output, Parameter>, Pick<Extract<IdOutput, object>, Parameter>>
+									: false
+								: false;
+						}[keyof Config["fields"]]
+						? CrudResourceTypeError<"pathParams.contract output property types must match contracts.id">
+						: unknown
+					: unknown
+		: never;
+
+type CrudPathParamsObjectConstraint<
+	Definition extends CrudResourceDefinition,
+	Config extends CrudPathParamsConfig,
+	Output extends object,
+> = [Output] extends [readonly unknown[]]
+	? CrudResourceTypeError<"pathParams.contract must output a parameter object, not an array">
+	: string extends keyof Output
+		? CrudResourceTypeError<"pathParams.contract must output an object with finite parameter keys">
+		: OptionalKeys<Output> extends never
+			? SameKeys<keyof Output, keyof Config["fields"]> extends true
+				? string extends Definition["path"]
+					? unknown
+					: SameKeys<PathParameters<Definition["path"]>, keyof Config["fields"]> extends true
+						? HasDuplicateValues<
+								MappedFieldTuple<PathParameterTuple<Definition["path"]>, Config["fields"]>
+							> extends true
+							? CrudResourceTypeError<"pathParams.fields must map to unique fields">
+							: false extends {
+										[
+											Parameter in keyof Config["fields"]
+										]: Parameter extends keyof Definition["idFields"]
+											? SameValue<Config["fields"][Parameter], Definition["idFields"][Parameter]>
+											: false;
+								  }[keyof Config["fields"]]
+								? CrudResourceTypeError<"pathParams.fields must match parent idFields mappings">
+								: CrudPathParamTypesConstraint<Definition, Config, Output>
+						: CrudResourceTypeError<"path parameters must match pathParams.fields keys">
+				: CrudResourceTypeError<"pathParams.contract output keys must match pathParams.fields keys">
+			: CrudResourceTypeError<"pathParams.contract output parameters must all be required">;
+
+type CrudPathParamsContractConstraint<Definition extends CrudResourceDefinition> =
+	Definition extends { readonly pathParams: infer Config extends CrudPathParamsConfig }
+		? SchemaOutput<Config["contract"]> extends infer Output
+			? IsAny<Output> extends true
+				? CrudResourceTypeError<"pathParams.contract output must be statically known">
+				: unknown extends Output
+					? string extends Definition["name"]
+						? unknown
+						: CrudResourceTypeError<"pathParams.contract output must be statically known">
+					: [Output] extends [object]
+						? CrudPathParamsObjectConstraint<Definition, Config, Extract<Output, object>>
+						: CrudResourceTypeError<"pathParams.contract must output a parameter object">
+			: never
+		: unknown;
+
+type CrudUpsertContractConstraint<Definition extends CrudResourceDefinition> =
+	Definition["operations"] extends { readonly upsert: unknown }
+		? Definition["contracts"] extends { readonly upsert: CrudSchemaSource }
+			? unknown
+			: CrudResourceTypeError<"operations.upsert requires contracts.upsert">
+		: unknown;
+
+/** Compile-time constraints applied to literal definitions by `defineCrudResource`. */
+export type CrudResourceDefinitionConstraint<Definition extends CrudResourceDefinition> =
+	CrudIdContractConstraint<Definition> &
+		CrudRouteSyntaxConstraint<Definition> &
+		CrudPathParamPresenceConstraint<Definition> &
+		CrudPathParamsContractConstraint<Definition> &
+		CrudUpsertContractConstraint<Definition>;
+
 export type AnyCrudResource = CrudResource<
 	string,
 	string,
@@ -153,16 +410,50 @@ export type AnyCrudResource = CrudResource<
 	CrudSchemaSource,
 	CrudSchemaSource,
 	CrudSchemaSource,
-	Readonly<Record<string, CrudRelationConfig>>
+	Readonly<Record<string, CrudRelationConfig>>,
+	CrudPathParamsConfig | undefined
 >;
 
 export type CrudId<Resource extends AnyCrudResource> = SchemaOutput<Resource["contracts"]["id"]>;
+export type CrudPathParams<Resource extends AnyCrudResource> = [Resource] extends [
+	{
+		readonly path: infer Path extends string;
+	},
+]
+	? string extends Path
+		? Readonly<Record<string, unknown>>
+		: PathParameters<Path> extends never
+			? never
+			: [Resource] extends [
+						{
+							readonly pathParams: {
+								readonly contract: infer Contract extends CrudSchemaSource;
+							};
+						},
+				  ]
+				? SchemaOutput<Contract>
+				: Readonly<Record<string, unknown>>
+	: Readonly<Record<string, unknown>>;
 export type CrudCreate<Resource extends AnyCrudResource> = SchemaOutput<
 	Resource["contracts"]["create"]
 >;
 export type CrudUpdate<Resource extends AnyCrudResource> = SchemaOutput<
 	Resource["contracts"]["update"]
 >;
+type HasPossibleCrudUpsert<Resource extends AnyCrudResource> = Resource extends Resource
+	? "upsert" extends keyof Resource["contracts"]
+		? true
+		: false
+	: never;
+export type CrudUpsert<Resource extends AnyCrudResource> = [Resource] extends [
+	{ readonly contracts: { readonly upsert: infer Upsert extends CrudSchemaSource } },
+]
+	? SchemaOutput<Upsert>
+	: string extends Resource["name"]
+		? never
+		: true extends HasPossibleCrudUpsert<Resource>
+			? unknown
+			: never;
 export type CrudResponseInput<Resource extends AnyCrudResource> = SchemaInput<
 	Resource["contracts"]["response"]
 >;

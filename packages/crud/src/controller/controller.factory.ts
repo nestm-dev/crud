@@ -9,6 +9,7 @@ import {
 	Param,
 	Patch,
 	Post,
+	Put,
 	Query,
 	SerializeOptions,
 	UseFilters,
@@ -30,7 +31,9 @@ import type {
 	AnyCrudResource,
 	CrudCreate,
 	CrudId,
+	CrudPathParams,
 	CrudUpdate,
+	CrudUpsert,
 } from "../resource/resource.types.ts";
 import type {
 	CrudEnhancers,
@@ -38,6 +41,7 @@ import type {
 	CrudOperationOptions,
 } from "../resource/operations.ts";
 import type { CrudService } from "../runtime/crud.service.ts";
+import type { CrudCollectionArgs } from "../runtime/runtime.types.ts";
 import { createCrudPageSchema } from "../schema/page-schema.ts";
 import { getCrudSchema } from "../schema/schema.types.ts";
 import {
@@ -59,6 +63,7 @@ const OPERATION_STATUS: Readonly<Record<CrudOperationName, number>> = {
 	update: HttpStatus.OK,
 	delete: HttpStatus.NO_CONTENT,
 	restore: HttpStatus.OK,
+	upsert: HttpStatus.OK,
 };
 
 export function createCrudController<Resource extends AnyCrudResource>(
@@ -67,12 +72,26 @@ export function createCrudController<Resource extends AnyCrudResource>(
 	class GeneratedCrudController {
 		constructor(readonly service: CrudService<Resource>) {}
 
-		create(input: CrudCreate<Resource>, context: ExecutionContext) {
-			return this.service.create(input, context);
+		create(
+			input: CrudCreate<Resource>,
+			pathParamsOrContext: CrudPathParams<Resource> | ExecutionContext,
+			context?: ExecutionContext,
+		) {
+			return this.service.create(
+				input,
+				...collectionArguments(resource, pathParamsOrContext, context),
+			);
 		}
 
-		list(query: CrudRawQuery, context: ExecutionContext) {
-			return this.service.list(query, context);
+		list(
+			query: CrudRawQuery,
+			pathParamsOrContext: CrudPathParams<Resource> | ExecutionContext,
+			context?: ExecutionContext,
+		) {
+			return this.service.list(
+				query,
+				...collectionArguments(resource, pathParamsOrContext, context),
+			);
 		}
 
 		read(id: CrudId<Resource>, query: CrudRawQuery, context: ExecutionContext) {
@@ -81,6 +100,10 @@ export function createCrudController<Resource extends AnyCrudResource>(
 
 		update(id: CrudId<Resource>, input: CrudUpdate<Resource>, context: ExecutionContext) {
 			return this.service.update(id, input, context);
+		}
+
+		upsert(id: CrudId<Resource>, input: CrudUpsert<Resource>, context: ExecutionContext) {
+			return this.service.upsert(id, input, context);
 		}
 
 		delete(id: CrudId<Resource>, context: ExecutionContext) {
@@ -134,7 +157,7 @@ function decorateOperation(
 		throw new TypeError(`Missing generated CRUD handler "${operation}".`);
 	Reflect.defineMetadata(
 		PARAMTYPES_METADATA,
-		Array.from({ length: parameterCount(operation) }, () => Object),
+		Array.from({ length: parameterCount(resource, operation) }, () => Object),
 		controller.prototype,
 		operation,
 	);
@@ -148,9 +171,11 @@ function decorateOperation(
 					? Get(path)
 					: operation === "update"
 						? Patch(path)
-						: operation === "delete"
-							? Delete(path)
-							: Post(path);
+						: operation === "upsert"
+							? Put(path)
+							: operation === "delete"
+								? Delete(path)
+								: Post(path);
 	applyMethod(routeDecorator, controller, operation, descriptor);
 	applyMethod(HttpCode(OPERATION_STATUS[operation]), controller, operation, descriptor);
 	if (resource.version !== undefined) {
@@ -182,8 +207,11 @@ function decorateOperation(
 	applyEnhancers(controller.prototype, options, operation, descriptor);
 }
 
-function parameterCount(operation: CrudOperationName): number {
-	if (operation === "read" || operation === "update") return 3;
+function parameterCount(resource: AnyCrudResource, operation: CrudOperationName): number {
+	if ((operation === "create" || operation === "list") && resource.pathParams !== undefined) {
+		return 3;
+	}
+	if (operation === "read" || operation === "update" || operation === "upsert") return 3;
 	return 2;
 }
 
@@ -195,12 +223,22 @@ function decorateParameters(
 	const prototype = controller.prototype;
 	if (operation === "create") {
 		Body({ schema: getCrudSchema(resource.contracts.create) })(prototype, operation, 0);
-		CrudContext()(prototype, operation, 1);
+		if (resource.pathParams === undefined) {
+			CrudContext()(prototype, operation, 1);
+		} else {
+			Param({ schema: getCrudSchema(resource.pathParams.contract) })(prototype, operation, 1);
+			CrudContext()(prototype, operation, 2);
+		}
 		return;
 	}
 	if (operation === "list") {
 		Query()(prototype, operation, 0);
-		CrudContext()(prototype, operation, 1);
+		if (resource.pathParams === undefined) {
+			CrudContext()(prototype, operation, 1);
+		} else {
+			Param({ schema: getCrudSchema(resource.pathParams.contract) })(prototype, operation, 1);
+			CrudContext()(prototype, operation, 2);
+		}
 		return;
 	}
 	Param({ schema: getCrudSchema(resource.contracts.id) })(prototype, operation, 0);
@@ -209,8 +247,10 @@ function decorateParameters(
 		CrudContext()(prototype, operation, 2);
 		return;
 	}
-	if (operation === "update") {
-		Body({ schema: getCrudSchema(resource.contracts.update) })(prototype, operation, 1);
+	if (operation === "update" || operation === "upsert") {
+		const contract =
+			operation === "update" ? resource.contracts.update : resource.contracts.upsert!;
+		Body({ schema: getCrudSchema(contract) })(prototype, operation, 1);
 		CrudContext()(prototype, operation, 2);
 		return;
 	}
@@ -390,6 +430,7 @@ function defaultSummary(resource: string, operation: CrudOperationName): string 
 		update: "Update",
 		delete: "Delete",
 		restore: "Restore",
+		upsert: "Upsert",
 	};
 	return `${verbs[operation]} ${resource}`;
 }
@@ -404,7 +445,7 @@ function errorResponses(
 	if (!["create", "list"].includes(operation)) {
 		responses.push([HttpStatus.NOT_FOUND, "Resource not found."]);
 	}
-	if (["create", "update", "delete", "restore"].includes(operation)) {
+	if (["create", "update", "delete", "restore", "upsert"].includes(operation)) {
 		responses.push([HttpStatus.CONFLICT, "Resource conflict."]);
 	}
 	if (hasRelations && (operation === "list" || operation === "read")) {
@@ -412,6 +453,18 @@ function errorResponses(
 	}
 	responses.push([HttpStatus.INTERNAL_SERVER_ERROR, "Internal persistence or hook failure."]);
 	return responses;
+}
+
+function collectionArguments<Resource extends AnyCrudResource>(
+	resource: Resource,
+	pathParamsOrContext: CrudPathParams<Resource> | ExecutionContext,
+	executionContext: ExecutionContext | undefined,
+): CrudCollectionArgs<Resource> {
+	const args =
+		resource.pathParams === undefined
+			? ([pathParamsOrContext] as const)
+			: ([pathParamsOrContext as CrudPathParams<Resource>, executionContext] as const);
+	return args as unknown as CrudCollectionArgs<Resource>;
 }
 
 function readIncludes(resource: AnyCrudResource, query: CrudRawQuery): readonly string[] {

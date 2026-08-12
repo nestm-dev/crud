@@ -13,11 +13,7 @@ import {
 import type { CrudQueryConfig } from "../query/query.types.ts";
 import type { CrudRelationConfig } from "../relation/relation.types.ts";
 
-const PARAMETER_PATTERN = /:([A-Za-z_][A-Za-z0-9_]*)/g;
-
-function routeParameters(path: string): string[] {
-	return [...path.matchAll(PARAMETER_PATTERN)].map((match) => match[1]!);
-}
+const PARAMETER_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function defineCrudResource<const Definition extends CrudResourceDefinition>(
 	definition: Definition & CrudResourceDefinitionConstraint<NoInfer<Definition>>,
@@ -48,9 +44,18 @@ function assertResourceDefinition(definition: CrudResourceDefinition): void {
 	if (typeof definition.itemPath !== "string" || definition.itemPath.trim() === "") {
 		throw new TypeError(`CRUD resource "${definition.name}" must declare an itemPath.`);
 	}
-	if (routeParameters(definition.path).length > 0) {
+	const pathRouteParams = assertCanonicalRoutePath(definition.name, "path", definition.path);
+	const itemRouteParams = assertCanonicalRoutePath(
+		definition.name,
+		"itemPath",
+		definition.itemPath,
+	);
+	assertUnique(definition.name, "path route parameters", pathRouteParams);
+	assertUnique(definition.name, "itemPath route parameters", itemRouteParams);
+	const itemRouteParamSet = new Set(itemRouteParams);
+	if (pathRouteParams.some((parameter) => itemRouteParamSet.has(parameter))) {
 		throw new TypeError(
-			`CRUD resource "${definition.name}" path cannot contain route parameters; declare ID parameters in itemPath.`,
+			`CRUD resource "${definition.name}" path and itemPath parameters must be disjoint.`,
 		);
 	}
 	if (!isRecord(definition.operations) || Object.keys(definition.operations).length === 0) {
@@ -77,6 +82,14 @@ function assertResourceDefinition(definition: CrudResourceDefinition): void {
 	for (const contract of ["id", "create", "update", "response"] as const) {
 		assertSchemaSource(definition.name, `contracts.${contract}`, definition.contracts[contract]);
 	}
+	if (definition.contracts.upsert !== undefined) {
+		assertSchemaSource(definition.name, "contracts.upsert", definition.contracts.upsert);
+	}
+	if (definition.operations.upsert !== undefined && definition.contracts.upsert === undefined) {
+		throw new TypeError(
+			`CRUD resource "${definition.name}" cannot enable upsert without contracts.upsert.`,
+		);
+	}
 	if (!isRecord(definition.idFields) || Object.keys(definition.idFields).length === 0) {
 		throw new TypeError(`CRUD resource "${definition.name}" must declare idFields.`);
 	}
@@ -84,16 +97,16 @@ function assertResourceDefinition(definition: CrudResourceDefinition): void {
 		assertNonEmptyString(definition.name, "idFields", field);
 	}
 
-	const routeParams = routeParameters(definition.itemPath);
+	assertPathParamsConfiguration(definition, pathRouteParams);
+
+	const routeParams = [...pathRouteParams, ...itemRouteParams];
 	const idParams = Object.keys(definition.idFields);
 	if (
-		routeParams.length === 0 ||
 		routeParams.length !== idParams.length ||
-		new Set(routeParams).size !== routeParams.length ||
 		routeParams.some((parameter) => !idParams.includes(parameter))
 	) {
 		throw new TypeError(
-			`CRUD resource "${definition.name}" itemPath parameters must match idFields exactly.`,
+			`CRUD resource "${definition.name}" full route parameters must match idFields exactly.`,
 		);
 	}
 	if (new Set(Object.values(definition.idFields)).size !== idParams.length) {
@@ -140,11 +153,22 @@ function snapshotResourceDefinition<Definition extends CrudResourceDefinition>(
 	return {
 		...definition,
 		idFields: Object.freeze({ ...definition.idFields }),
+		...(definition.pathParams === undefined
+			? {}
+			: {
+					pathParams: Object.freeze({
+						contract: snapshotSchemaSource(definition.pathParams.contract),
+						fields: Object.freeze({ ...definition.pathParams.fields }),
+					}),
+				}),
 		contracts: Object.freeze({
 			id: snapshotSchemaSource(definition.contracts.id),
 			create: snapshotSchemaSource(definition.contracts.create),
 			update: snapshotSchemaSource(definition.contracts.update),
 			response: snapshotSchemaSource(definition.contracts.response),
+			...(definition.contracts.upsert === undefined
+				? {}
+				: { upsert: snapshotSchemaSource(definition.contracts.upsert) }),
 		}),
 		operations,
 		...(query === undefined ? {} : { query }),
@@ -243,6 +267,75 @@ function snapshotRelation(relation: CrudRelationConfig): CrudRelationConfig {
 		local: Object.freeze([...relation.local]),
 		foreign: Object.freeze([...relation.foreign]),
 	});
+}
+
+function assertCanonicalRoutePath(resource: string, label: string, path: string): string[] {
+	const parameters: string[] = [];
+	for (const segment of path.split("/")) {
+		if (segment.startsWith(":")) {
+			const parameter = segment.slice(1);
+			if (!PARAMETER_NAME_PATTERN.test(parameter)) {
+				throw new TypeError(
+					`CRUD resource "${resource}" ${label} parameters must use canonical ":identifier" path segments.`,
+				);
+			}
+			parameters.push(parameter);
+			continue;
+		}
+		if (segment.includes(":") || segment.includes("*")) {
+			throw new TypeError(
+				`CRUD resource "${resource}" ${label} parameters must use canonical ":identifier" path segments.`,
+			);
+		}
+	}
+	return parameters;
+}
+
+function assertPathParamsConfiguration(
+	definition: CrudResourceDefinition,
+	pathRouteParams: readonly string[],
+): void {
+	const config = definition.pathParams;
+	if (pathRouteParams.length === 0) {
+		if (config !== undefined) {
+			throw new TypeError(
+				`CRUD resource "${definition.name}" cannot declare pathParams when path has no parameters.`,
+			);
+		}
+		return;
+	}
+	if (!isRecord(config)) {
+		throw new TypeError(
+			`CRUD resource "${definition.name}" must declare pathParams when path has parameters.`,
+		);
+	}
+	assertSchemaSource(definition.name, "pathParams.contract", config.contract);
+	if (!isRecord(config.fields)) {
+		throw new TypeError(`CRUD resource "${definition.name}" must declare pathParams.fields.`);
+	}
+	const fields = config.fields as Readonly<Record<string, unknown>>;
+	const fieldParams = Object.keys(fields);
+	if (
+		fieldParams.length !== pathRouteParams.length ||
+		pathRouteParams.some((parameter) => !fieldParams.includes(parameter))
+	) {
+		throw new TypeError(
+			`CRUD resource "${definition.name}" path parameters must match pathParams.fields exactly.`,
+		);
+	}
+	const mappedFields: string[] = [];
+	for (const field of Object.values(fields)) {
+		assertNonEmptyString(definition.name, "pathParams.fields", field);
+		mappedFields.push(field);
+	}
+	assertUnique(definition.name, "pathParams.fields mappings", mappedFields);
+	for (const parameter of pathRouteParams) {
+		if (fields[parameter] !== definition.idFields[parameter]) {
+			throw new TypeError(
+				`CRUD resource "${definition.name}" pathParams.fields must match parent idFields mappings.`,
+			);
+		}
+	}
 }
 
 function assertQueryConfiguration(definition: CrudResourceDefinition): void {

@@ -165,6 +165,7 @@ plugin, Swagger UI continues to show the ordinary generated parameters.
 | List      | `GET /users`              | `200`, `{ data, meta }` |
 | Read      | `GET /users/:id`          | `200`, response DTO     |
 | Update    | `PATCH /users/:id`        | `200`, response DTO     |
+| Upsert    | `PUT /users/:id`          | `200`, response DTO     |
 | Delete    | `DELETE /users/:id`       | `204`, no body          |
 | Restore   | `POST /users/:id/restore` | `200`, response DTO     |
 
@@ -228,6 +229,46 @@ const tenantUsers = defineCrudResource({
 The binding's `fields` must include both logical ID fields. ORM adapter column
 maps can translate those logical names to physical database columns.
 
+## Nested resources
+
+Collection paths may own part of a resource's identity. Declare those route
+parameters separately for collection validation, while the ordinary ID contract
+continues to describe the complete item route:
+
+```ts
+const versions = defineCrudResource({
+	name: "artifact-versions",
+	path: "artifacts/:artifactId/versions",
+	pathParams: {
+		contract: z.object({ artifactId: z.string().uuid() }),
+		fields: { artifactId: "artifactId" },
+	},
+	itemPath: ":versionId",
+	idFields: { artifactId: "artifactId", versionId: "versionId" },
+	contracts: {
+		id: z.object({ artifactId: z.string().uuid(), versionId: z.string().uuid() }),
+		create: CreateVersion,
+		update: UpdateVersion,
+		response: VersionResponse,
+	},
+	operations: crudOperations.all(),
+});
+```
+
+Nested list/count predicates always include the mapped parent values. Nested
+creates treat those values as framework-owned insert values and therefore
+require `mappings.scopeCreate` plus `scopeCreateFields`; request-body mappings
+cannot override them. Scopes, hooks, adapter transaction runners, row
+predicates, and after-commit events receive `context.pathParams`. Direct
+headless calls use `crud.list(query, pathParams, context?)` and
+`crud.create(input, pathParams, context?)`; item calls still receive the full
+ID object.
+
+Cursor tokens for a nested collection are bound to its parent values, so a
+valid cursor issued under one parent is rejected under another. A nested
+resource may be a relation source, but cannot be a relation target in this
+release because a batched relation query has no single parent-path context.
+
 ## Custom controllers
 
 For a fully custom controller, make the feature headless and inject the same
@@ -280,7 +321,10 @@ keeping binding and adapter providers, registry entries, service exports, and
 resource imports available. This is intended for fully custom compatibility
 controllers. To replace only selected operations, leave generation enabled,
 omit those operations from the resource, and add custom routes alongside the
-generated controller.
+generated controller. `operations` controls generated route exposure; it is not
+a runtime authorization boundary on direct `CrudService` calls. A custom route
+must still declare an operation when its adapter capability or binding
+configuration (for example atomic upsert) is validated from that declaration.
 
 `CrudService` is where scopes, hooks, transactions, soft deletion, error
 sanitization, and response mapping run, so custom controllers reuse the same
@@ -320,7 +364,7 @@ persistence keys.
 ## Scopes and hooks
 
 Resource scopes are ordered injectable providers. Their predicates apply to
-list/count/read/update/delete/restore and relation queries. Scope `createValues`
+list/count/read/update/upsert/delete/restore and relation queries. Scope `createValues`
 overwrite client values only while inserting, which supports tenant and owner
 isolation without making immutable ownership updateable. A scope that
 intentionally owns an update field must return it through distinct
@@ -342,6 +386,52 @@ rolls back the mutation; an `afterCommit` failure is sent to
 `afterCommitErrorHandler` after the committed response has been determined.
 An adapter transaction must resolve only after the real commit it owns; a
 savepoint or joined ambient transaction cannot satisfy this mutation contract.
+
+## Atomic upsert
+
+Upsert is an explicit opt-in operation; `crudOperations.all()` does not enable
+it. Add an `upsert` request contract and select the operation to generate
+`PUT itemPath`, or keep the resource headless and call `CrudService.upsert()`
+from a compatibility controller:
+
+```ts
+const viewerBindings = defineCrudResource({
+	// ...path, complete ID, and ordinary contracts
+	contracts: { id, create, update, upsert: UpsertViewerBinding, response },
+	operations: crudOperations.only("upsert", "delete"),
+});
+
+const binding = bindTypeOrmCrud({
+	resource: viewerBindings,
+	fields,
+	adapter,
+	scopeCreateFields: ["viewerUserId"],
+	upsert: {
+		conflictFields: ["artifactId", "viewerUserId", "mcpServerId"],
+		overwriteFields: ["toolPrefix", "allowedTools"],
+	},
+	mappings: {
+		upsert: (id, input) => ({ ...id, ...input }),
+		scopeCreate: (values) => ({ viewerUserId: values.viewerUserId }),
+		// ...ordinary mappings
+	},
+});
+```
+
+The mapper produces one proposed final insert row; scope-owned values are
+merged last. `conflictFields` and `overwriteFields` are adapter persistence
+paths, not public field names. The conflict target may include scope-owned
+identity columns that are absent from the URL, while overwrite fields must be
+disjoint from both the conflict identity and `scopeCreateFields`.
+
+An adapter advertising the optional atomic-upsert capability must perform one
+race-free statement, apply the normal resource and scope predicate inside the
+conflict-update arm, return `null` for a hidden conflict without changing it,
+and return the resulting record without a reload. Upsert has dedicated
+`beforeUpsert`/`afterUpsert`/`afterCommit` lifecycle events and deliberately has
+no pre-read, `prior` record, or created-versus-updated branch signal. The
+TypeORM PostgreSQL adapter is certified for this contract; the other bundled
+adapters currently reject resources that enable upsert.
 
 ## Projections
 
@@ -419,7 +509,7 @@ Register both resource bindings. `include=posts` batches the target query,
 supports composite join tuples, and always applies the target resource's scopes
 and soft-delete policy. To-many includes fetch one row beyond `maxItems` (or the
 root `maxRelatedRows`) and return `422` if the bound is exceeded; data is never
-silently truncated. Nested relation traversal and nested writes are deferred.
+silently truncated. Nested relation traversal is deferred.
 
 ## Errors
 
@@ -493,7 +583,7 @@ Swagger metadata, and four adapters. The broader
 [hono-crud feature surface](https://github.com/kshdotdev/hono-crud/blob/80de807d7c18691b7ddedf6ccca6db47b5cb1b57/README.md#features)
 is a staged roadmap, not an alpha release gate.
 
-Batch operations, upsert/bulk patch, nested writes, optimistic concurrency,
+Batch operations, bulk patch, optimistic concurrency,
 aggregates, full-text search, sparse fieldsets, import/export, computed fields,
 audit history, record versioning, GraphQL, microservices, and schematics are
 deferred. Cache, rate limiting, idempotency, logging/events/webhooks,

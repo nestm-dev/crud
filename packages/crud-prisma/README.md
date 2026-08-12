@@ -47,6 +47,14 @@ adapter compile `isnull=true|false` to a constant false/true predicate without s
 The binder accepts Nest `useValue`, `useClass`, `useExisting`, and `useFactory`
 adapter providers. A factory can inject an application-owned `PrismaClient`;
 this package never constructs it and never calls `$connect` or `$disconnect`.
+Required insert fields owned by nested path parameters or application scopes
+can be declared with `scopeCreateFields` and mapped separately through
+`mappings.scopeCreate`, matching the core binding contract.
+
+The Prisma adapter does not currently advertise atomic, predicate-guarded
+upsert support. A delegate `upsert` cannot generally apply the full CRUD scope
+predicate only to its conflict-update arm, so resources enabling that operation
+must use an adapter that can preserve the authorization contract.
 
 Prisma unique violations map to `409`, supported database/model constraints to
 `400`, and unrecognized failures to a sanitized `500`. The `0.1` alpha is

@@ -30,6 +30,8 @@ export type {
 	DefinedCrudResource,
 	CrudHookType,
 	CrudId,
+	CrudPathParams,
+	CrudPathParamsConfig,
 	CrudResource,
 	CrudResourceDefinition,
 	CrudResponse,
@@ -37,6 +39,7 @@ export type {
 	CrudScopeType,
 	CrudSoftDeleteConfig,
 	CrudUpdate,
+	CrudUpsert,
 	CrudVersion,
 } from "./resource/resource.types.ts";
 
@@ -48,6 +51,7 @@ export type {
 	CrudAfterCommitErrorContext,
 	CrudAfterCommitErrorHandler,
 	CrudLifecycleHook,
+	CrudCollectionArgs,
 	CrudMutationEvent,
 	CrudOperationContext,
 	CrudProjection,
@@ -101,6 +105,7 @@ export type {
 	CrudCursorBinding,
 	CrudCursorCodec,
 	CrudCursorErrorCode,
+	CrudCursorFixedValue,
 } from "./cursor/cursor.types.ts";
 
 export {

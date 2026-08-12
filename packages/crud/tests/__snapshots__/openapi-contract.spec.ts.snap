@@ -2321,6 +2321,868 @@ exports[`generated OpenAPI contract matrix > matches the complete generated Open
         ],
       },
     },
+    "/matrix/parents/{parentId}/children": {
+      "get": {
+        "operationId": "openapi-nested_list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "parentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "parentId": {
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "parentId",
+                          "id",
+                          "name",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "hasNextPage": {
+                          "type": "boolean",
+                        },
+                        "hasPreviousPage": {
+                          "type": "boolean",
+                        },
+                        "limit": {
+                          "minimum": 1,
+                          "type": "integer",
+                        },
+                        "mode": {
+                          "enum": [
+                            "offset",
+                          ],
+                          "type": "string",
+                        },
+                        "page": {
+                          "minimum": 1,
+                          "type": "integer",
+                        },
+                        "total": {
+                          "minimum": 0,
+                          "type": "integer",
+                        },
+                        "totalPages": {
+                          "minimum": 0,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "mode",
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages",
+                        "hasNextPage",
+                        "hasPreviousPage",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Successful response.",
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Bad Request",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        400,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Invalid request.",
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Internal Server Error",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        500,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Internal persistence or hook failure.",
+          },
+        },
+        "summary": "List openapi-nested",
+        "tags": [
+          "openapi-nested",
+        ],
+      },
+      "post": {
+        "operationId": "openapi-nested_create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "parentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "parentId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "parentId",
+                    "id",
+                    "name",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Successful response.",
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Bad Request",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        400,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Invalid request.",
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Conflict",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        409,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Resource conflict.",
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Internal Server Error",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        500,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Internal persistence or hook failure.",
+          },
+        },
+        "summary": "Create openapi-nested",
+        "tags": [
+          "openapi-nested",
+        ],
+      },
+    },
+    "/matrix/parents/{parentId}/children/{id}": {
+      "get": {
+        "operationId": "openapi-nested_read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "parentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": true,
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "parentId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "parentId",
+                    "id",
+                    "name",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Successful response.",
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Bad Request",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        400,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Invalid request.",
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Not Found",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        404,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Resource not found.",
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Internal Server Error",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        500,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Internal persistence or hook failure.",
+          },
+        },
+        "summary": "Read openapi-nested",
+        "tags": [
+          "openapi-nested",
+        ],
+      },
+      "put": {
+        "operationId": "openapi-nested_upsert",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "parentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": true,
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "parentId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "parentId",
+                    "id",
+                    "name",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Successful response.",
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Bad Request",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        400,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Invalid request.",
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Not Found",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        404,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Resource not found.",
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Conflict",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        409,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Resource conflict.",
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "Internal Server Error",
+                      ],
+                      "type": "string",
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                        },
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                      ],
+                    },
+                    "statusCode": {
+                      "enum": [
+                        500,
+                      ],
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "error",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Internal persistence or hook failure.",
+          },
+        },
+        "summary": "Upsert openapi-nested",
+        "tags": [
+          "openapi-nested",
+        ],
+      },
+    },
     "/matrix/related": {
       "get": {
         "operationId": "openapi-related_list",

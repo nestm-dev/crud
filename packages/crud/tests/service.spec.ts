@@ -331,6 +331,367 @@ describe("CrudService transaction and lifecycle semantics", () => {
 	});
 });
 
+describe("CrudService atomic upsert", () => {
+	it("uses one adapter upsert and dedicated hooks for insert and replacement", async () => {
+		const events: string[] = [];
+		const adapter = new FakeCrudAdapter([], {}, events);
+		const upsertCall = vi.spyOn(adapter, "upsert");
+		const resolveScope = vi.fn(() => ({ createValues: { viewerUserId: "viewer-1" } }));
+		const scope: CrudScope<typeof viewerBindingResource> = { resolve: resolveScope };
+		const hook: CrudLifecycleHook<typeof viewerBindingResource> = {
+			beforeUpsert: (id, input, context) => {
+				events.push("hook:beforeUpsert");
+				expect(id).toEqual({ artifactId: "artifact-1", serverId: "server-1" });
+				expect(context.session).toBeDefined();
+				return { ...input, toolPrefix: input.toolPrefix.toUpperCase() };
+			},
+			afterUpsert: (_record, context) => {
+				events.push("hook:afterUpsert");
+				expect(context.session).toBeDefined();
+				expect(context.prior).toBeUndefined();
+			},
+			afterCommit: (event) => {
+				events.push("hook:afterCommit");
+				expect(event).toMatchObject({ operation: "upsert" });
+				expect(event.prior).toBeUndefined();
+			},
+		};
+		const service = createViewerBindingService(adapter, [hook], [scope]);
+
+		await expect(
+			service.upsert({ artifactId: "artifact-1", serverId: "server-1" }, { toolPrefix: "first" }),
+		).resolves.toMatchObject({ toolPrefix: "FIRST", alias: null });
+		await expect(
+			service.upsert({ artifactId: "artifact-1", serverId: "server-1" }, { toolPrefix: "second" }),
+		).resolves.toMatchObject({ toolPrefix: "SECOND", alias: null });
+
+		expect(adapter.calls).toMatchObject({ create: 0, findOne: 0, update: 0, upsert: 2 });
+		expect(resolveScope).toHaveBeenCalledTimes(2);
+		expect(adapter.snapshot()).toEqual([
+			{
+				artifactId: "artifact-1",
+				viewerUserId: "viewer-1",
+				serverId: "server-1",
+				alias: null,
+				toolPrefix: "SECOND",
+			},
+		]);
+		expect(upsertCall).toHaveBeenLastCalledWith(
+			{
+				conflictFields: ["artifactId", "viewerUserId", "serverId"],
+				overwriteFields: ["alias", "toolPrefix"],
+				predicate: expect.any(Object),
+				values: {
+					artifactId: "artifact-1",
+					viewerUserId: "viewer-1",
+					serverId: "server-1",
+					alias: null,
+					toolPrefix: "SECOND",
+				},
+			},
+			expect.objectContaining({ operation: "upsert", session: expect.any(Object) }),
+		);
+		expect(events).toEqual([
+			"transaction:begin",
+			"hook:beforeUpsert",
+			"hook:afterUpsert",
+			"transaction:commit",
+			"hook:afterCommit",
+			"transaction:begin",
+			"hook:beforeUpsert",
+			"hook:afterUpsert",
+			"transaction:commit",
+			"hook:afterCommit",
+		]);
+	});
+
+	it("returns 404 without mutating a conflicting row hidden by the scope predicate", async () => {
+		const record = {
+			artifactId: "artifact-1",
+			viewerUserId: "viewer-1",
+			serverId: "server-1",
+			alias: "preserved",
+			toolPrefix: "old",
+			visible: false,
+		};
+		const adapter = new FakeCrudAdapter([record]);
+		const afterUpsert = vi.fn();
+		const afterCommit = vi.fn();
+		const service = createViewerBindingService(
+			adapter,
+			[{ afterUpsert, afterCommit }],
+			[
+				{
+					resolve: () => ({
+						createValues: { viewerUserId: "viewer-1" },
+						predicate: {
+							kind: "comparison",
+							field: "visible",
+							operator: "eq",
+							value: true,
+						},
+					}),
+				},
+			],
+		);
+
+		await expect(
+			service.upsert({ artifactId: "artifact-1", serverId: "server-1" }, { toolPrefix: "new" }),
+		).rejects.toMatchObject({ status: 404 });
+		expect(adapter.snapshot()).toEqual([record]);
+		expect(afterUpsert).not.toHaveBeenCalled();
+		expect(afterCommit).not.toHaveBeenCalled();
+	});
+
+	it.each(["capability", "method", "configuration", "mapping"] as const)(
+		"fails bootstrap when atomic upsert %s is missing",
+		(mode) => {
+			const adapter = new FakeCrudAdapter([], mode === "capability" ? { upsert: false } : {});
+			if (mode === "method") Object.defineProperty(adapter, "upsert", { value: undefined });
+			const binding = createViewerBinding(adapter, {
+				configure: mode !== "configuration",
+				map: mode !== "mapping",
+			});
+			expect(
+				() =>
+					new CrudService(
+						viewerBindingResource,
+						binding,
+						adapter,
+						[],
+						[viewerBindingScope()],
+						new CrudRegistry(),
+						resolveCrudModuleOptions({}),
+					),
+			).toThrow(/upsert/u);
+		},
+	);
+
+	it.each([
+		["duplicate conflict fields", ["artifactId", "artifactId"], ["alias"]],
+		["empty conflict fields", [], ["alias"]],
+		["duplicate overwrite fields", ["artifactId"], ["alias", "alias"]],
+		["empty overwrite fields", ["artifactId"], []],
+		["overlapping conflict and overwrite fields", ["artifactId"], ["artifactId"]],
+		["overwriting a scope-owned field", ["artifactId"], ["viewerUserId"]],
+	] as const)("rejects %s", (_label, conflictFields, overwriteFields) => {
+		const adapter = new FakeCrudAdapter();
+		const binding = { ...createViewerBinding(adapter) };
+		Object.defineProperty(binding, "upsert", { value: { conflictFields, overwriteFields } });
+		expect(
+			() =>
+				new CrudService(
+					viewerBindingResource,
+					binding,
+					adapter,
+					[],
+					[viewerBindingScope()],
+					new CrudRegistry(),
+					resolveCrudModuleOptions({}),
+				),
+		).toThrow(/upsert|overwrite|repeats/u);
+	});
+});
+
+describe("CrudService nested resource context", () => {
+	it("constrains collection reads and materializes route-owned create values", async () => {
+		const adapter = new FakeCrudAdapter([
+			{ parentId: 1, id: 1, name: "First parent" },
+			{ parentId: 2, id: 1, name: "Second parent" },
+		]);
+		const transaction = vi.spyOn(adapter, "transaction");
+		const afterCommit = vi.fn();
+		const contexts: unknown[] = [];
+		const service = createNestedChildService(
+			adapter,
+			[{ resolve: (context) => (contexts.push(context), {}) }],
+			[{ afterCommit }],
+		);
+
+		await expect(service.list({ page: "1" }, { parentId: 2 })).resolves.toMatchObject({
+			data: [{ parentId: 2, id: 1, name: "Second parent" }],
+			meta: { total: 1 },
+		});
+		await expect(service.create({ id: 2, name: "Created" }, { parentId: 2 })).resolves.toEqual({
+			parentId: 2,
+			id: 2,
+			name: "Created",
+		});
+		await expect(
+			service.update({ parentId: 2, id: 2 }, { name: "Updated" }),
+		).resolves.toMatchObject({ name: "Updated" });
+		await expect(service.read({ parentId: 2, id: 2 })).resolves.toMatchObject({ name: "Updated" });
+		expect(adapter.snapshot()).toContainEqual({ parentId: 2, id: 2, name: "Updated" });
+		expect(contexts).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ operation: "list", pathParams: { parentId: 2 } }),
+				expect.objectContaining({ operation: "create", pathParams: { parentId: 2 } }),
+				expect.objectContaining({ operation: "update", pathParams: { parentId: 2 } }),
+				expect.objectContaining({ operation: "read", pathParams: { parentId: 2 } }),
+			]),
+		);
+		expect(transaction).toHaveBeenNthCalledWith(
+			1,
+			expect.any(Function),
+			expect.objectContaining({ operation: "create", pathParams: { parentId: 2 } }),
+		);
+		expect(transaction).toHaveBeenNthCalledWith(
+			2,
+			expect.any(Function),
+			expect.objectContaining({ operation: "update", pathParams: { parentId: 2 } }),
+		);
+		expect(afterCommit).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({ operation: "create", pathParams: { parentId: 2 } }),
+		);
+		expect(afterCommit).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ operation: "update", pathParams: { parentId: 2 } }),
+		);
+	});
+
+	it("fails closed when a trusted scope conflicts with a route-owned create value", async () => {
+		const adapter = new FakeCrudAdapter();
+		const service = createNestedChildService(adapter, [
+			{ resolve: () => ({ createValues: { parentId: 99 } }) },
+		]);
+
+		await expect(
+			service.create({ id: 1, name: "Rejected" }, { parentId: 1 }),
+		).rejects.toMatchObject({ status: 500 });
+		expect(adapter.calls.create).toBe(0);
+	});
+
+	it("coalesces an equal route-owned and scope-owned create value", async () => {
+		const adapter = new FakeCrudAdapter();
+		const service = createNestedChildService(adapter, [
+			{ resolve: () => ({ createValues: { parentId: 1 } }) },
+		]);
+
+		await expect(service.create({ id: 1, name: "Accepted" }, { parentId: 1 })).resolves.toEqual({
+			parentId: 1,
+			id: 1,
+			name: "Accepted",
+		});
+	});
+
+	it("binds cursor tokens to one parent collection", async () => {
+		const adapter = new FakeCrudAdapter([
+			{ parentId: 1, id: 1, name: "One" },
+			{ parentId: 1, id: 2, name: "Two" },
+			{ parentId: 2, id: 1, name: "Other" },
+		]);
+		const service = createNestedChildService(adapter);
+		const first = await service.list({}, { parentId: 1 });
+		if (first.meta.mode !== "cursor" || first.meta.nextCursor === null) {
+			throw new TypeError("Expected a nested cursor page.");
+		}
+		await expect(
+			service.list({ after: first.meta.nextCursor }, { parentId: 2 }),
+		).rejects.toMatchObject({ status: 400 });
+	});
+
+	it("requires explicit scope-create mapping for nested creates", () => {
+		const adapter = new FakeCrudAdapter();
+		const binding = defineCrudBinding({
+			resource: nestedChildResource,
+			adapter: { useValue: adapter },
+			fields: ["parentId", "id", "name"],
+			mappings: {
+				create: (input) => input,
+				update: (input) => input,
+				persistence: (values) => values,
+				response: (record) => nestedChildResponse(record),
+			},
+		});
+		expect(
+			() =>
+				new CrudService(
+					nestedChildResource,
+					binding,
+					adapter,
+					[],
+					[],
+					new CrudRegistry(),
+					resolveCrudModuleOptions({}),
+				),
+		).toThrow(/scopeCreate/u);
+	});
+
+	it("requires explicit parent materialization for nested upsert-only resources", () => {
+		const resource = defineCrudResource({
+			name: "nested-upsert-only",
+			path: "parents/:parentId/upsert-only",
+			itemPath: ":id",
+			idFields: { parentId: "parentId", id: "id" },
+			pathParams: {
+				contract: z.object({ parentId: z.coerce.number().int() }),
+				fields: { parentId: "parentId" },
+			},
+			contracts: {
+				id: z.object({ parentId: z.coerce.number().int(), id: z.coerce.number().int() }),
+				create: z.object({ name: z.string() }),
+				update: z.object({ name: z.string().optional() }),
+				upsert: z.object({ name: z.string() }),
+				response: z.object({ parentId: z.number(), id: z.number(), name: z.string() }),
+			},
+			operations: crudOperations.only("upsert"),
+		});
+		const adapter = new FakeCrudAdapter();
+		const bindingOptions = {
+			resource,
+			adapter: { useValue: adapter },
+			fields: ["parentId", "id", "name"] as const,
+			upsert: { conflictFields: ["parentId", "id"], overwriteFields: ["name"] } as const,
+			mappings: {
+				create: (input: { name: string }) => input,
+				upsert: (id: { parentId: number; id: number }, input: { name: string }) => ({
+					...id,
+					...input,
+				}),
+				update: (input: { name?: string }) => input,
+				persistence: (values: Readonly<Record<string, unknown>>) => values,
+				response: (record: Record<string, unknown>) => nestedChildResponse(record),
+			},
+		};
+		const withoutParentScope = defineCrudBinding(bindingOptions);
+
+		expect(
+			() =>
+				new CrudService(
+					resource,
+					withoutParentScope,
+					adapter,
+					[],
+					[],
+					new CrudRegistry(),
+					resolveCrudModuleOptions({}),
+				),
+		).toThrow(/scopeCreate/u);
+
+		const withParentScope = defineCrudBinding({
+			...bindingOptions,
+			scopeCreateFields: ["parentId"],
+			mappings: {
+				...bindingOptions.mappings,
+				scopeCreate: (values) => ({ parentId: values.parentId }),
+			},
+		});
+		expect(
+			() =>
+				new CrudService(
+					resource,
+					withParentScope,
+					adapter,
+					[],
+					[],
+					new CrudRegistry(),
+					resolveCrudModuleOptions({}),
+				),
+		).not.toThrow();
+	});
+});
+
 describe("CrudService soft deletion", () => {
 	it("logically deletes, hides normal reads, supports deleted-only lists, and restores", async () => {
 		const adapter = new FakeCrudAdapter([
@@ -474,6 +835,165 @@ describe("CrudService bounded relations", () => {
 		).rejects.toMatchObject({ status: 422 });
 	});
 });
+
+const viewerBindingResource = defineCrudResource({
+	name: "viewer-bindings",
+	path: "viewer-bindings",
+	itemPath: ":artifactId/:serverId",
+	idFields: { artifactId: "artifactId", serverId: "serverId" },
+	contracts: {
+		id: z.object({ artifactId: z.string(), serverId: z.string() }),
+		create: z.object({ toolPrefix: z.string() }),
+		update: z.object({ toolPrefix: z.string().optional() }),
+		upsert: z.object({ toolPrefix: z.string() }),
+		response: z.object({
+			artifactId: z.string(),
+			viewerUserId: z.string(),
+			serverId: z.string(),
+			alias: z.string().nullable(),
+			toolPrefix: z.string(),
+		}),
+	},
+	operations: crudOperations.only("upsert"),
+});
+
+function createViewerBinding(
+	adapter: FakeCrudAdapter,
+	options: {
+		readonly configure?: boolean;
+		readonly map?: boolean;
+		readonly conflictFields?: readonly [string, ...string[]];
+		readonly overwriteFields?: readonly [string, ...string[]];
+	} = {},
+) {
+	return defineCrudBinding({
+		resource: viewerBindingResource,
+		adapter: { useValue: adapter },
+		fields: ["artifactId", "serverId"],
+		scopeCreateFields: ["viewerUserId"],
+		...(options.configure === false
+			? {}
+			: {
+					upsert: {
+						conflictFields: options.conflictFields ?? ["artifactId", "viewerUserId", "serverId"],
+						overwriteFields: options.overwriteFields ?? ["alias", "toolPrefix"],
+					},
+				}),
+		mappings: {
+			create: (input) => ({
+				artifactId: "unused",
+				serverId: "unused",
+				alias: null,
+				toolPrefix: input.toolPrefix,
+			}),
+			...(options.map === false
+				? {}
+				: {
+						upsert: (
+							id: { artifactId: string; serverId: string },
+							input: { toolPrefix: string },
+						) => ({
+							artifactId: id.artifactId,
+							serverId: id.serverId,
+							alias: null,
+							toolPrefix: input.toolPrefix,
+						}),
+					}),
+			update: (input) => input,
+			scopeCreate: (values) => ({ viewerUserId: values.viewerUserId }),
+			persistence: (values) => values,
+			response: (record) => ({
+				artifactId: requiredString(record.artifactId),
+				viewerUserId: requiredString(record.viewerUserId),
+				serverId: requiredString(record.serverId),
+				alias: record.alias === null ? null : requiredString(record.alias),
+				toolPrefix: requiredString(record.toolPrefix),
+			}),
+		},
+	});
+}
+
+function viewerBindingScope(): CrudScope<typeof viewerBindingResource> {
+	return {
+		resolve: () => ({ createValues: { viewerUserId: "viewer-1" } }),
+	};
+}
+
+function createViewerBindingService(
+	adapter: FakeCrudAdapter,
+	hooks: readonly CrudLifecycleHook<typeof viewerBindingResource>[] = [],
+	scopes: readonly CrudScope<typeof viewerBindingResource>[] = [],
+) {
+	return new CrudService(
+		viewerBindingResource,
+		createViewerBinding(adapter),
+		adapter,
+		hooks,
+		scopes,
+		new CrudRegistry(),
+		resolveCrudModuleOptions({}),
+	);
+}
+
+const nestedChildResource = defineCrudResource({
+	name: "nested-children",
+	path: "parents/:parentId/children",
+	itemPath: ":id",
+	idFields: { parentId: "parentId", id: "id" },
+	pathParams: {
+		contract: z.object({ parentId: z.coerce.number().int() }),
+		fields: { parentId: "parentId" },
+	},
+	contracts: {
+		id: z.object({ parentId: z.coerce.number().int(), id: z.coerce.number().int() }),
+		create: z.object({ id: z.number().int(), name: z.string() }),
+		update: z.object({ name: z.string().optional() }),
+		response: z.object({ parentId: z.number().int(), id: z.number().int(), name: z.string() }),
+	},
+	operations: crudOperations.only("create", "list", "read", "update"),
+	query: {
+		sort: { fields: ["id"], default: ["id"], cursor: ["id"] },
+		pagination: { offset: true, cursor: true, defaultLimit: 1, maxLimit: 10 },
+	},
+});
+
+function createNestedChildService(
+	adapter: FakeCrudAdapter,
+	scopes: readonly CrudScope<typeof nestedChildResource>[] = [],
+	hooks: readonly CrudLifecycleHook<typeof nestedChildResource>[] = [],
+) {
+	const binding = defineCrudBinding({
+		resource: nestedChildResource,
+		adapter: { useValue: adapter },
+		fields: ["parentId", "id", "name"],
+		scopeCreateFields: ["parentId"],
+		mappings: {
+			create: (input) => input,
+			update: (input) => input,
+			scopeCreate: (values) => ({ parentId: values.parentId }),
+			persistence: (values) => values,
+			response: (record) => nestedChildResponse(record),
+		},
+	});
+	return new CrudService(
+		nestedChildResource,
+		binding,
+		adapter,
+		hooks,
+		scopes,
+		new CrudRegistry(),
+		resolveCrudModuleOptions({}),
+		new HmacSha256CrudCursorCodec("a secure cursor secret with at least thirty-two bytes"),
+	);
+}
+
+function nestedChildResponse(record: Record<string, unknown>) {
+	return {
+		parentId: requiredNumber(record.parentId),
+		id: requiredNumber(record.id),
+		name: requiredString(record.name),
+	};
+}
 
 const childResource = defineCrudResource({
 	name: "children",

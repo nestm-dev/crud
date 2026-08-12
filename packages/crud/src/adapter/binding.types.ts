@@ -4,9 +4,11 @@ import type { CrudFactoryDependency } from "../module/factory-provider.types.ts"
 import type {
 	AnyCrudResource,
 	CrudCreate,
+	CrudId,
 	CrudRequiredField,
 	CrudResponseInput,
 	CrudUpdate,
+	CrudUpsert,
 } from "../resource/resource.types.ts";
 import type { CrudAdapter, CrudValues } from "./adapter.types.ts";
 
@@ -69,6 +71,13 @@ export interface CrudBindingMappings<
 		| Partial<Pick<CreateValues, ScopeCreateField>>
 		| Promise<Partial<Pick<CreateValues, ScopeCreateField>>>;
 	update(input: CrudUpdate<Resource>): UpdateValues | Promise<UpdateValues>;
+	/** Maps an upsert request and its complete identity to one proposed persistence row. */
+	upsert?(
+		id: CrudId<Resource>,
+		input: CrudUpsert<Resource>,
+	):
+		| CrudCreateMappingValues<CreateValues, ScopeCreateField>
+		| Promise<CrudCreateMappingValues<CreateValues, ScopeCreateField>>;
 	/**
 	 * Maps framework-generated logical update values (explicit scope `updateValues`
 	 * and soft delete) to the adapter's update input.
@@ -84,6 +93,13 @@ export interface CrudBindingMappings<
 		relations: Readonly<Record<string, unknown>>,
 		projected?: Readonly<Record<string, unknown>>,
 	): CrudResponseInput<Resource> | Promise<CrudResponseInput<Resource>>;
+}
+
+export interface CrudBindingUpsertOptions {
+	/** Complete, non-empty adapter persistence paths forming the conflict target. */
+	readonly conflictFields: readonly [string, ...string[]];
+	/** Adapter persistence paths copied from the proposed insert row on conflict. */
+	readonly overwriteFields: readonly [string, ...string[]];
 }
 
 export interface CrudResourceBinding<
@@ -107,6 +123,8 @@ export interface CrudResourceBinding<
 	>;
 	/** Adapter insert fields supplied by scopes through `mappings.scopeCreate`. */
 	readonly scopeCreateFields?: readonly string[];
+	/** Required adapter-level configuration when the resource enables atomic upsert. */
+	readonly upsert?: CrudBindingUpsertOptions;
 	readonly fields: Fields;
 }
 
@@ -142,7 +160,7 @@ export type DefineCrudBindingOptions<
 		UpdateValues,
 		ScopeCreateFields[number]
 	>,
-	typeof CRUD_BINDING | "mappings" | "scopeCreateFields"
+	typeof CRUD_BINDING | "mappings" | "scopeCreateFields" | "upsert"
 > & {
 	readonly mappings: CrudBindingMappings<
 		Resource,
@@ -152,6 +170,7 @@ export type DefineCrudBindingOptions<
 		NoInfer<ScopeCreateFields[number]>
 	>;
 	readonly scopeCreateFields?: ScopeCreateFields;
+	readonly upsert?: CrudBindingUpsertOptions;
 } & CompleteCrudFieldSelection<Resource, Fields>;
 
 export function defineCrudBinding<
@@ -179,7 +198,7 @@ export function defineCrudBinding<
 	UpdateValues,
 	ScopeCreateFields[number]
 > {
-	const { scopeCreateFields, ...bindingOptions } = options;
+	const { scopeCreateFields, upsert, ...bindingOptions } = options;
 	const adapter = Object.freeze({
 		...options.adapter,
 		...("inject" in options.adapter && options.adapter.inject !== undefined
@@ -194,6 +213,15 @@ export function defineCrudBinding<
 		...(scopeCreateFields === undefined
 			? {}
 			: { scopeCreateFields: Object.freeze([...scopeCreateFields]) }),
+		...(upsert === undefined
+			? {}
+			: {
+					upsert: Object.freeze({
+						...upsert,
+						conflictFields: Object.freeze([...upsert.conflictFields]),
+						overwriteFields: Object.freeze([...upsert.overwriteFields]),
+					}),
+				}),
 		fields: Object.freeze([...options.fields]) as unknown as Fields,
 		[CRUD_BINDING]: true as const,
 	}) as unknown as CrudResourceBinding<

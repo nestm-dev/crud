@@ -5,10 +5,28 @@ import type { CrudPredicate } from "../query/query.types.ts";
 import type {
 	AnyCrudResource,
 	CrudCreate,
+	CrudId,
+	CrudPathParams,
 	CrudResponseInput,
 	CrudUpdate,
+	CrudUpsert,
 } from "../resource/resource.types.ts";
 import type { CrudOperationName } from "../resource/operations.ts";
+
+/** Arguments following a collection payload/query in direct CrudService calls. */
+type CrudFlatCollectionArgs = readonly [executionContext?: ExecutionContext];
+type CrudNestedCollectionArgs<Resource extends AnyCrudResource> = readonly [
+	pathParams: CrudPathParams<Resource>,
+	executionContext?: ExecutionContext,
+];
+
+export type CrudCollectionArgs<Resource extends AnyCrudResource> = [Resource] extends [
+	{ readonly pathParams: object },
+]
+	? CrudNestedCollectionArgs<Resource>
+	: [CrudPathParams<Resource>] extends [never]
+		? CrudFlatCollectionArgs
+		: CrudFlatCollectionArgs | CrudNestedCollectionArgs<Resource>;
 
 export interface CrudOperationContext<Resource extends AnyCrudResource = AnyCrudResource> {
 	readonly resource: Resource;
@@ -16,6 +34,7 @@ export interface CrudOperationContext<Resource extends AnyCrudResource = AnyCrud
 	readonly executionContext?: ExecutionContext;
 	readonly session?: CrudAdapterSession;
 	readonly prior?: unknown;
+	readonly pathParams?: CrudPathParams<Resource>;
 }
 
 export interface CrudLifecycleHook<Resource extends AnyCrudResource = AnyCrudResource> {
@@ -29,6 +48,12 @@ export interface CrudLifecycleHook<Resource extends AnyCrudResource = AnyCrudRes
 		context: CrudOperationContext<Resource>,
 	): CrudUpdate<Resource> | Promise<CrudUpdate<Resource>>;
 	afterUpdate?(record: unknown, context: CrudOperationContext<Resource>): void | Promise<void>;
+	beforeUpsert?(
+		id: CrudId<Resource>,
+		input: CrudUpsert<Resource>,
+		context: CrudOperationContext<Resource>,
+	): CrudUpsert<Resource> | Promise<CrudUpsert<Resource>>;
+	afterUpsert?(record: unknown, context: CrudOperationContext<Resource>): void | Promise<void>;
 	beforeDelete?(context: CrudOperationContext<Resource>): void | Promise<void>;
 	afterDelete?(record: unknown, context: CrudOperationContext<Resource>): void | Promise<void>;
 	beforeRestore?(context: CrudOperationContext<Resource>): void | Promise<void>;
@@ -74,10 +99,14 @@ export interface CrudProjection<Resource extends AnyCrudResource = AnyCrudResour
 
 export interface CrudMutationEvent<Resource extends AnyCrudResource = AnyCrudResource> {
 	readonly resource: Resource;
-	readonly operation: Extract<CrudOperationName, "create" | "update" | "delete" | "restore">;
+	readonly operation: Extract<
+		CrudOperationName,
+		"create" | "update" | "delete" | "restore" | "upsert"
+	>;
 	readonly response?: CrudResponseInput<Resource>;
 	readonly prior?: unknown;
 	readonly executionContext?: ExecutionContext;
+	readonly pathParams?: CrudPathParams<Resource>;
 }
 
 export interface CrudScopeResult {
@@ -95,12 +124,14 @@ export interface CrudScope<Resource extends AnyCrudResource = AnyCrudResource> {
 	resolve(context: CrudOperationContext<Resource>): CrudScopeResult | Promise<CrudScopeResult>;
 }
 
-export interface CrudAfterCommitErrorContext {
+export interface CrudAfterCommitErrorContext<Resource extends AnyCrudResource = AnyCrudResource> {
 	readonly error: unknown;
-	readonly hook: CrudLifecycleHook;
-	readonly event: CrudMutationEvent;
+	readonly hook: CrudLifecycleHook<Resource>;
+	readonly event: CrudMutationEvent<Resource>;
 }
 
-export type CrudAfterCommitErrorHandler = (
-	context: CrudAfterCommitErrorContext,
-) => void | Promise<void>;
+export interface CrudAfterCommitErrorHandler {
+	<Resource extends AnyCrudResource>(
+		context: CrudAfterCommitErrorContext<Resource>,
+	): void | Promise<void>;
+}

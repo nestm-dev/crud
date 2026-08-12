@@ -1,3 +1,4 @@
+import { CrudAdapterError } from "../../src/adapter/adapter.error.ts";
 import type {
 	CrudAdapter,
 	CrudAdapterCapabilities,
@@ -9,6 +10,7 @@ import type {
 	CrudFindManyResult,
 	CrudFindOneInput,
 	CrudUpdateInput,
+	CrudUpsertInput,
 } from "../../src/adapter/adapter.types.ts";
 import type { CrudFilterOperator, CrudOrder, CrudPredicate } from "../../src/query/query.types.ts";
 
@@ -23,6 +25,7 @@ export class FakeCrudAdapter implements CrudAdapter<FakeRecord> {
 		findMany: 0,
 		findOne: 0,
 		update: 0,
+		upsert: 0,
 	};
 
 	readonly #adapterId = Symbol("fake-crud-adapter");
@@ -45,6 +48,7 @@ export class FakeCrudAdapter implements CrudAdapter<FakeRecord> {
 			containsInsensitive: true,
 			returning: true,
 			transactions: true,
+			upsert: true,
 			...capabilities,
 		};
 	}
@@ -121,6 +125,37 @@ export class FakeCrudAdapter implements CrudAdapter<FakeRecord> {
 			return null;
 		}
 		const updated = { ...records[index], ...input.values };
+		records[index] = updated;
+		return cloneRecord(updated);
+	}
+
+	async upsert(input: CrudUpsertInput, context: CrudAdapterContext): Promise<FakeRecord | null> {
+		this.calls.upsert += 1;
+		const records = this.#recordsFor(context);
+		for (const field of input.conflictFields) {
+			if (!Object.hasOwn(input.values, field) || input.values[field] == null) {
+				throw new CrudAdapterError(
+					"constraint",
+					`Fake upsert is missing conflict field "${field}".`,
+				);
+			}
+		}
+		const index = records.findIndex((record) =>
+			input.conflictFields.every((field) => Object.is(record[field], input.values[field])),
+		);
+		if (index < 0) {
+			const created = { ...input.values };
+			records.push(created);
+			return cloneRecord(created);
+		}
+		const current = records[index]!;
+		if (!matches(current, input.predicate, (record, field) => this.#readField(record, field))) {
+			return null;
+		}
+		const overwritten = Object.fromEntries(
+			input.overwriteFields.map((field) => [field, input.values[field]]),
+		);
+		const updated = { ...current, ...overwritten };
 		records[index] = updated;
 		return cloneRecord(updated);
 	}

@@ -8,6 +8,7 @@ export {
 	isCrudBinding,
 	type CrudAdapterProvider,
 	type CrudBindingMappings,
+	type CrudBindingUpsertOptions,
 	type CrudCreateMappingValues,
 	type CrudScopeCreateField,
 	type CompleteCrudFieldSelection,
@@ -27,6 +28,8 @@ export type {
 	CrudFindManyResult,
 	CrudFindOneInput,
 	CrudUpdateInput,
+	CrudUpsertAdapter,
+	CrudUpsertInput,
 	CrudValues,
 } from "./adapter.types.ts";
 export type {

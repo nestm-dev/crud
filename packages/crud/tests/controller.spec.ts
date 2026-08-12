@@ -1,10 +1,12 @@
 import {
 	HTTP_CODE_METADATA,
 	METHOD_METADATA,
+	PARAMTYPES_METADATA,
 	PATH_METADATA,
+	ROUTE_ARGS_METADATA,
 	VERSION_METADATA,
 } from "@nestjs/common/constants";
-import { HttpStatus, RequestMethod } from "@nestjs/common";
+import { HttpStatus, RequestMethod, type ExecutionContext } from "@nestjs/common";
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
@@ -38,6 +40,29 @@ const routeResource = defineCrudResource({
 	version: "2",
 });
 
+const nestedRouteResource = defineCrudResource({
+	name: "artifact-versions",
+	path: "/api/artifacts/:artifactId/versions/",
+	itemPath: ":versionId",
+	idFields: { artifactId: "artifactId", versionId: "versionId" },
+	pathParams: {
+		contract: z.object({ artifactId: z.string().uuid() }),
+		fields: { artifactId: "artifactId" },
+	},
+	contracts: {
+		id: z.object({ artifactId: z.string().uuid(), versionId: z.coerce.number().int() }),
+		create: z.object({ name: z.string() }),
+		update: z.object({ name: z.string().optional() }),
+		upsert: z.object({ name: z.string(), active: z.boolean() }),
+		response: z.object({
+			artifactId: z.string().uuid(),
+			versionId: z.number().int(),
+			name: z.string(),
+		}),
+	},
+	operations: crudOperations.only("create", "list", "read", "update", "upsert"),
+});
+
 describe("generated CRUD controller metadata", () => {
 	it("uses a deterministic class name and normalized controller path", () => {
 		const controller = createCrudController(routeResource);
@@ -46,6 +71,79 @@ describe("generated CRUD controller metadata", () => {
 		expect(getCrudControllerName(routeResource)).toBe("BillingItemsCrudController");
 		expect(Reflect.getMetadata(PATH_METADATA, controller)).toBe("api/billing-items");
 		expect(Reflect.getMetadata("swagger/apiUseTags", controller)).toEqual(["Billing"]);
+	});
+
+	it("keeps parent parameters in the controller path and item parameters in item routes", () => {
+		const controller = createCrudController(nestedRouteResource);
+
+		expect(Reflect.getMetadata(PATH_METADATA, controller)).toBe(
+			"api/artifacts/:artifactId/versions",
+		);
+		expect(Reflect.getMetadata(PATH_METADATA, controller.prototype.create)).toBe("/");
+		expect(Reflect.getMetadata(PATH_METADATA, controller.prototype.list)).toBe("/");
+		expect(Reflect.getMetadata(PATH_METADATA, controller.prototype.read)).toBe(":versionId");
+	});
+
+	it("decorates nested collection parameters separately from full item IDs", () => {
+		const controller = createCrudController(nestedRouteResource);
+		const createParameters = routeParameters(controller, "create");
+		const listParameters = routeParameters(controller, "list");
+		const readParameters = routeParameters(controller, "read");
+
+		expect(parameterIndices(createParameters)).toEqual([0, 1, 2]);
+		expect(parameterIndices(listParameters)).toEqual([0, 1, 2]);
+		expect(parameterIndices(readParameters)).toEqual([0, 1, 2]);
+		expect(parameterSchemaAt(createParameters, 1)).toBe(nestedRouteResource.pathParams.contract);
+		expect(parameterSchemaAt(listParameters, 1)).toBe(nestedRouteResource.pathParams.contract);
+		expect(parameterSchemaAt(readParameters, 0)).toBe(nestedRouteResource.contracts.id);
+		expect(Reflect.getMetadata(PARAMTYPES_METADATA, controller.prototype, "create")).toHaveLength(
+			3,
+		);
+		expect(Reflect.getMetadata(PARAMTYPES_METADATA, controller.prototype, "list")).toHaveLength(3);
+	});
+
+	it("forwards nested collection parameters before the execution context", async () => {
+		const controller = createCrudController(nestedRouteResource);
+		const calls: unknown[][] = [];
+		const service = {
+			create: (...args: unknown[]) => {
+				calls.push(args);
+				return Promise.resolve({});
+			},
+			list: (...args: unknown[]) => {
+				calls.push(args);
+				return Promise.resolve({});
+			},
+		};
+		const Controller = controller as unknown as new (service: unknown) => {
+			create(input: object, pathParams: object, context: ExecutionContext): Promise<unknown>;
+			list(query: object, pathParams: object, context: ExecutionContext): Promise<unknown>;
+		};
+		const instance = new Controller(service);
+		const input = { name: "Version one" };
+		const query = { limit: "10" };
+		const pathParams = { artifactId: "1a477276-fb29-41c6-8fe7-d6d819d6026d" };
+		const context = {} as ExecutionContext;
+
+		await instance.create(input, pathParams, context);
+		await instance.list(query, pathParams, context);
+
+		expect(calls).toEqual([
+			[input, pathParams, context],
+			[query, pathParams, context],
+		]);
+	});
+
+	it("generates item PUT metadata from the upsert contract", () => {
+		const controller = createCrudController(nestedRouteResource);
+		const handler = controller.prototype.upsert as object;
+		const parameters = routeParameters(controller, "upsert");
+
+		expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(":versionId");
+		expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.PUT);
+		expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(HttpStatus.OK);
+		expect(parameterSchemaAt(parameters, 0)).toBe(nestedRouteResource.contracts.id);
+		expect(parameterSchemaAt(parameters, 1)).toBe(nestedRouteResource.contracts.upsert);
 	});
 
 	it.each([
@@ -229,6 +327,37 @@ interface SwaggerParameterMetadata {
 	readonly in: string;
 	readonly name: string;
 	readonly schema?: unknown;
+}
+
+interface RouteParameterMetadata {
+	readonly index: number;
+	readonly schema?: unknown;
+}
+
+function routeParameters(controller: object, operation: string): readonly RouteParameterMetadata[] {
+	const value: unknown = Reflect.getMetadata(ROUTE_ARGS_METADATA, controller, operation);
+	if (typeof value !== "object" || value === null) {
+		throw new TypeError("Expected generated route parameter metadata.");
+	}
+	return Object.values(value).filter(isRouteParameterMetadata);
+}
+
+function isRouteParameterMetadata(value: unknown): value is RouteParameterMetadata {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"index" in value &&
+		typeof value.index === "number"
+	);
+}
+
+function parameterIndices(parameters: readonly RouteParameterMetadata[]): readonly number[] {
+	return parameters.map(({ index }) => index).toSorted((left, right) => left - right);
+}
+
+function parameterSchemaAt(parameters: readonly RouteParameterMetadata[], index: number): unknown {
+	return parameters.find((parameter) => parameter.index === index && parameter.schema !== undefined)
+		?.schema;
 }
 
 function parameterMap(handler: object): ReadonlyMap<string, SwaggerParameterMetadata> {
