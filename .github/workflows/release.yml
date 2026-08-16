@@ -59,7 +59,7 @@ jobs:
         env:
           PG_URL: postgres://nestm:nestm@localhost:5432/nestm_crud
       - name: Create release PR or publish
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
           publish: pnpm run release
           version: pnpm run release:version
