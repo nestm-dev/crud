@@ -52,6 +52,7 @@ void referenceChecker.exists({}, { session });
 export const adapter = createTypeOrmCrudAdapter({
 	repository,
 	columns: { id: "id", name: "name", tenantId: "tenantId", secret: "secret" },
+	transaction: { isolationLevel: "repeatable read" },
 });
 
 export const selectedAdapter = createTypeOrmCrudAdapter({

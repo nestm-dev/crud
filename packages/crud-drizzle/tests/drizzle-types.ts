@@ -26,6 +26,7 @@ export const adapter = createDrizzleCrudAdapter({
 	database,
 	table: users,
 	columns: { id: users.id, name: users.name },
+	transaction: { isolationLevel: "repeatable read" },
 });
 
 // Compile-only proof that application-owned transactions and native row predicates stay typed.

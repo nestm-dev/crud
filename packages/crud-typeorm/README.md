@@ -39,6 +39,29 @@ and soft delete generate logical values outside create/update input mappings.
 Native `rowPredicate` parameters must not use the adapter-reserved `crud_<n>`
 names; a collision is rejected before the statement executes.
 
+## Operation-wide transaction requirements
+
+CRUD mutations run scopes, lifecycle hooks, mutation validators, mappings,
+persistence, and response projections inside `adapter.transaction()`. Declare
+the minimum isolation needed by any of that work before the transaction starts:
+
+```ts
+const documentsAdapter = createTypeOrmCrudAdapter({
+	repository: documentsRepository,
+	columns: { id: "id", organizationId: "organizationId", title: "title" },
+	transaction: { isolationLevel: "repeatable read" },
+	transactionRunner: tenantTransactionRunner,
+});
+```
+
+This is distinct from `rowPredicate.transaction`, which describes only the
+predicate's own read/update/delete requirement. An operation-wide requirement
+also applies to create hooks and validators, where a nested policy-store read
+cannot safely promote a transaction after its first statement. The adapter
+passes the strongest requested isolation to an application-owned runner, or
+opens its own transaction when no runner is configured. A runner that reports
+weaker effective isolation fails closed.
+
 ## Transaction-scoped reference checks
 
 Mutation validators can verify a referenced TypeORM row without opening a second

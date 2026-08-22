@@ -11,6 +11,7 @@ export {
 	type DrizzleCrudAdapterOptions,
 	type DrizzleCrudDatabase,
 	type DrizzleCrudEffectiveTransaction,
+	type DrizzleCrudOperationTransactionOptions,
 	type DrizzleCrudRowPredicate,
 	type DrizzleCrudRowPredicateContext,
 	type DrizzleCrudRowPredicateOptions,

@@ -143,6 +143,25 @@ Use the object form's `transaction.isolationLevel` when predicate resolution
 loads snapshot-sensitive policy data; the requirement is applied before the
 transaction opens and is accurately recorded in nested session checks.
 
+`rowPredicate.transaction` covers only predicate resolution and application.
+When a scope, lifecycle hook, validator, mapping, or projection also requires a
+stable snapshot—including during create—declare an operation-wide minimum:
+
+```ts
+const documentsAdapter = createDrizzleCrudAdapter({
+	database: db,
+	table: documents,
+	columns: { id: documents.id, organizationId: documents.organizationId },
+	transaction: { isolationLevel: "repeatable read" },
+	transactionRunner: tenantTransactionRunner,
+});
+```
+
+The adapter requests the strongest operation, count, and row-predicate
+isolation before any statement runs. Without a custom runner, configuring the
+operation requirement makes the adapter open its own transaction. A runner
+that reports weaker effective isolation fails closed.
+
 The binder accepts Nest `useValue`, `useClass`, `useExisting`, and `useFactory`
 adapter providers. Use a factory when another Nest module provides the Drizzle
 database. The package never creates a driver, opens a pool, or closes a database

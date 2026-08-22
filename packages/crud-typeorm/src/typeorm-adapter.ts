@@ -155,6 +155,12 @@ export interface TypeOrmCrudRowPredicateOptions<RecordType extends ObjectLiteral
 	readonly transaction?: Pick<TypeOrmCrudTransactionRequirements, "isolationLevel">;
 }
 
+/** Minimum transaction settings for the complete CRUD operation lifecycle. */
+export type TypeOrmCrudOperationTransactionOptions = Pick<
+	TypeOrmCrudTransactionRequirements,
+	"isolationLevel"
+>;
+
 /** Minimum context needed to reuse an active CRUD mutation transaction. */
 export interface TypeOrmCrudReferenceContext {
 	readonly session: CrudAdapterSession;
@@ -225,6 +231,14 @@ export interface TypeOrmCrudAdapterOptions<RecordType extends ObjectLiteral> {
 	 * `RETURNING` list so TypeORM cannot issue an implicit full-entity reload.
 	 */
 	readonly select?: FindOptionsSelect<RecordType>;
+	/**
+	 * Minimum isolation for the complete CRUD operation, including scopes,
+	 * lifecycle hooks, validators, mappings, projections, and persistence.
+	 *
+	 * Declare this when application work inside `adapter.transaction()` may
+	 * require a stable snapshot before the adapter issues its first statement.
+	 */
+	readonly transaction?: TypeOrmCrudOperationTransactionOptions;
 	/** Wraps standalone work in an application-owned transaction, for example a tenant RLS executor. */
 	readonly transactionRunner?: TypeOrmCrudTransactionRunner;
 	/** Adds a native, fail-closed SQL predicate to every read, update, and delete statement. */
@@ -412,20 +426,26 @@ function scalarMutationColumn(
 	return column === undefined || column.isVirtual || column.isVirtualProperty ? undefined : column;
 }
 
+function strongestIsolationLevel(
+	...levels: readonly (TypeOrmCrudTransactionIsolationLevel | undefined)[]
+): TypeOrmCrudTransactionIsolationLevel {
+	return levels.includes("repeatable read") ? "repeatable read" : "read committed";
+}
+
 function transactionRequirements(
 	context: CrudAdapterContext,
+	operationIsolationLevel?: TypeOrmCrudTransactionIsolationLevel,
 	rowPredicateIsolationLevel?: TypeOrmCrudTransactionIsolationLevel,
 ): TypeOrmCrudTransactionRequirements {
 	const readOnly = context.operation === "list" || context.operation === "read";
-	const operationIsolationLevel =
-		context.operation === "list" ? "repeatable read" : "read committed";
+	const defaultIsolationLevel = context.operation === "list" ? "repeatable read" : "read committed";
 	return {
 		accessMode: readOnly ? "read only" : "read write",
-		isolationLevel:
-			operationIsolationLevel === "repeatable read" ||
-			rowPredicateIsolationLevel === "repeatable read"
-				? "repeatable read"
-				: "read committed",
+		isolationLevel: strongestIsolationLevel(
+			defaultIsolationLevel,
+			operationIsolationLevel,
+			rowPredicateIsolationLevel,
+		),
 		mustOwnCommit: !readOnly,
 	};
 }
@@ -618,6 +638,7 @@ export class TypeOrmCrudAdapter<
 	readonly #repository: Repository<EntityType>;
 	readonly #columns: Readonly<Record<string, string>>;
 	readonly #selectedPropertyPaths: readonly string[] | undefined;
+	readonly #operationIsolationLevel: TypeOrmCrudTransactionIsolationLevel | undefined;
 	readonly #transactionRunner: TypeOrmCrudTransactionRunner | undefined;
 	readonly #rowPredicate: TypeOrmCrudRowPredicate<EntityType> | undefined;
 	readonly #rowPredicateIsolationLevel: TypeOrmCrudTransactionIsolationLevel | undefined;
@@ -649,6 +670,7 @@ export class TypeOrmCrudAdapter<
 				"TypeORM CRUD selected records do not support base single-table inheritance repositories.",
 			);
 		}
+		this.#operationIsolationLevel = adapterOptions.transaction?.isolationLevel;
 		this.#transactionRunner = adapterOptions.transactionRunner;
 		this.#rowPredicate =
 			typeof adapterOptions.rowPredicate === "function"
@@ -680,6 +702,7 @@ export class TypeOrmCrudAdapter<
 			context,
 			transactionRequirements(
 				context,
+				this.#operationIsolationLevel,
 				context.operation === "create" ? undefined : this.#rowPredicateIsolationLevel,
 			),
 		);
@@ -692,7 +715,11 @@ export class TypeOrmCrudAdapter<
 		try {
 			return await this.#withRepository(
 				context,
-				{ accessMode: "read write", isolationLevel: "read committed", mustOwnCommit: true },
+				{
+					accessMode: "read write",
+					isolationLevel: strongestIsolationLevel(this.#operationIsolationLevel),
+					mustOwnCommit: true,
+				},
 				false,
 				async (repository) => {
 					if (this.#selectedPropertyPaths !== undefined) {
@@ -725,7 +752,10 @@ export class TypeOrmCrudAdapter<
 				context,
 				{
 					accessMode: "read write",
-					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					isolationLevel: strongestIsolationLevel(
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: true,
 				},
 				this.#rowPredicate !== undefined,
@@ -777,7 +807,10 @@ export class TypeOrmCrudAdapter<
 				context,
 				{
 					accessMode: "read only",
-					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					isolationLevel: strongestIsolationLevel(
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: false,
 				},
 				this.#rowPredicate !== undefined,
@@ -797,10 +830,11 @@ export class TypeOrmCrudAdapter<
 				context,
 				{
 					accessMode: "read only",
-					isolationLevel:
-						input.count || this.#rowPredicateIsolationLevel === "repeatable read"
-							? "repeatable read"
-							: "read committed",
+					isolationLevel: strongestIsolationLevel(
+						input.count ? "repeatable read" : undefined,
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: false,
 				},
 				input.count || this.#rowPredicate !== undefined,
@@ -835,7 +869,10 @@ export class TypeOrmCrudAdapter<
 				context,
 				{
 					accessMode: "read write",
-					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					isolationLevel: strongestIsolationLevel(
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: true,
 				},
 				this.#rowPredicate !== undefined,
@@ -885,7 +922,10 @@ export class TypeOrmCrudAdapter<
 				context,
 				{
 					accessMode: "read write",
-					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					isolationLevel: strongestIsolationLevel(
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: true,
 				},
 				this.#rowPredicate !== undefined,
@@ -983,7 +1023,11 @@ export class TypeOrmCrudAdapter<
 			return work(this.#repositoryFrom(state.manager), context);
 		}
 
-		if (this.#transactionRunner !== undefined || forceTransaction) {
+		if (
+			this.#transactionRunner !== undefined ||
+			this.#operationIsolationLevel !== undefined ||
+			forceTransaction
+		) {
 			return this.#runTransaction(
 				async (session) => {
 					const state = this.#stateFrom(session);
