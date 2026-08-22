@@ -287,6 +287,55 @@ describe("DrizzleCrudAdapter transaction runner and row predicate", () => {
 		});
 	});
 
+	it("declares operation-wide isolation before create hooks can run", async () => {
+		const { database } = createFakeDatabase();
+		const runner = createRunner(database);
+		const adapter = createDrizzleCrudAdapter({
+			database,
+			table: users,
+			columns: { id: users.id, tenantId: users.tenantId, name: users.name },
+			transaction: { isolationLevel: "repeatable read" },
+			transactionRunner: runner,
+		});
+
+		await adapter.transaction(
+			(session) =>
+				adapter.create(
+					{ values: { id: 1, tenantId: "tenant-a", name: "Ada" } },
+					{ ...adapterContext("create"), session },
+				),
+			adapterContext("create"),
+		);
+
+		expect(runner.contexts).toHaveLength(1);
+		expect(runner.contexts[0]).toMatchObject({
+			operation: "create",
+			accessMode: "read write",
+			isolationLevel: "repeatable read",
+			mustOwnCommit: true,
+		});
+	});
+
+	it("forces a native operation transaction when no runner is configured", async () => {
+		const { database, capture } = createFakeDatabase();
+		const adapter = createDrizzleCrudAdapter({
+			database,
+			table: users,
+			columns: { id: users.id, tenantId: users.tenantId, name: users.name },
+			transaction: { isolationLevel: "repeatable read" },
+		});
+
+		await adapter.create(
+			{ values: { id: 1, tenantId: "tenant-a", name: "Ada" } },
+			adapterContext("create"),
+		);
+
+		expect(capture.transactionCalls).toBe(1);
+		expect(capture.transactionConfigs).toEqual([
+			{ accessMode: "read write", isolationLevel: "repeatable read" },
+		]);
+	});
+
 	it("rejects a mutation runner that reports it does not own the real commit", async () => {
 		const { database } = createFakeDatabase();
 		const work = vi.fn(async () => undefined);

@@ -433,6 +433,50 @@ describe("TypeOrmCrudAdapter row predicate", () => {
 		expect(capture.startedTransactions).toEqual(["REPEATABLE READ"]);
 	});
 
+	it("declares operation-wide isolation before create hooks can run", async () => {
+		const capture = createCapture();
+		const repository = createFakeRepository(capture);
+		const runner = new TestRunner(managerOf(repository));
+		const adapter = createTypeOrmCrudAdapter({
+			repository,
+			columns: COLUMNS,
+			transaction: { isolationLevel: "repeatable read" },
+			transactionRunner: runner,
+		});
+
+		await adapter.transaction(
+			(session) =>
+				adapter.create(
+					{ values: { name: "Ada", tenantId: "tenant-a" } },
+					{ ...context("create"), session },
+				),
+			context("create"),
+		);
+
+		expect(runner.contexts).toHaveLength(1);
+		expect(runner.contexts[0]).toMatchObject({
+			operation: "create",
+			accessMode: "read write",
+			isolationLevel: "repeatable read",
+			mustOwnCommit: true,
+		});
+	});
+
+	it("forces a native operation transaction when no runner is configured", async () => {
+		const capture = createCapture();
+		const repository = createFakeRepository(capture);
+		const adapter = createTypeOrmCrudAdapter({
+			repository,
+			columns: COLUMNS,
+			transaction: { isolationLevel: "repeatable read" },
+		});
+
+		await adapter.create({ values: { name: "Ada", tenantId: "tenant-a" } }, context("create"));
+
+		expect(capture.startedTransactions).toEqual(["REPEATABLE READ"]);
+		expect(capture.commits).toBe(1);
+	});
+
 	it("opens a read-only transaction for a bare counted list", async () => {
 		const capture = createCapture();
 		const repository = createFakeRepository(capture);

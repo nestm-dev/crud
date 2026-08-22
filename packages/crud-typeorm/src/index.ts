@@ -13,6 +13,7 @@ export {
 	type TypeOrmCrudAdapterOptions,
 	type TypeOrmCrudCreateValues,
 	type TypeOrmCrudEffectiveTransaction,
+	type TypeOrmCrudOperationTransactionOptions,
 	type TypeOrmCrudRowPredicate,
 	type TypeOrmCrudRowPredicateContext,
 	type TypeOrmCrudRowPredicateOptions,

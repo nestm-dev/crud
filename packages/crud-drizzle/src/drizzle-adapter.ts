@@ -89,6 +89,12 @@ export interface DrizzleCrudRowPredicateOptions<Table extends AnyPgTable> {
 	readonly transaction?: Pick<DrizzleCrudTransactionRequirements, "isolationLevel">;
 }
 
+/** Minimum transaction settings for the complete CRUD operation lifecycle. */
+export type DrizzleCrudOperationTransactionOptions = Pick<
+	DrizzleCrudTransactionRequirements,
+	"isolationLevel"
+>;
+
 export interface DrizzleCrudAdapterOptions<
 	Table extends AnyPgTable,
 	QueryResult extends PgQueryResultHKT,
@@ -102,6 +108,14 @@ export interface DrizzleCrudAdapterOptions<
 	readonly columns: DrizzleCrudColumns;
 	/** Maps logical fields to keys in returned row objects; defaults to the logical field. */
 	readonly recordKeys?: Readonly<Record<string, string>>;
+	/**
+	 * Minimum isolation for the complete CRUD operation, including scopes,
+	 * lifecycle hooks, validators, mappings, projections, and persistence.
+	 *
+	 * Declare this when application work inside `adapter.transaction()` may
+	 * require a stable snapshot before the adapter issues its first statement.
+	 */
+	readonly transaction?: DrizzleCrudOperationTransactionOptions;
 	/** Wraps standalone work in an application-owned transaction, for example a tenant RLS executor. */
 	readonly transactionRunner?: DrizzleCrudTransactionRunner<QueryResult, FullSchema, Schema>;
 	/** Adds a native, fail-closed SQL predicate to every read, update, and delete statement. */
@@ -191,20 +205,26 @@ interface DrizzleSessionState<Row, CreateValues extends object, UpdateValues ext
 	readonly transaction: DrizzleCrudEffectiveTransaction;
 }
 
+function strongestIsolationLevel(
+	...levels: readonly (DrizzleCrudTransactionIsolationLevel | undefined)[]
+): DrizzleCrudTransactionIsolationLevel {
+	return levels.includes("repeatable read") ? "repeatable read" : "read committed";
+}
+
 function transactionRequirements(
 	context: CrudAdapterContext,
+	operationIsolationLevel?: DrizzleCrudTransactionIsolationLevel,
 	rowPredicateIsolationLevel?: DrizzleCrudTransactionIsolationLevel,
 ): DrizzleCrudTransactionRequirements {
 	const readOnly = context.operation === "list" || context.operation === "read";
-	const operationIsolationLevel =
-		context.operation === "list" ? "repeatable read" : "read committed";
+	const defaultIsolationLevel = context.operation === "list" ? "repeatable read" : "read committed";
 	return {
 		accessMode: readOnly ? "read only" : "read write",
-		isolationLevel:
-			operationIsolationLevel === "repeatable read" ||
-			rowPredicateIsolationLevel === "repeatable read"
-				? "repeatable read"
-				: "read committed",
+		isolationLevel: strongestIsolationLevel(
+			defaultIsolationLevel,
+			operationIsolationLevel,
+			rowPredicateIsolationLevel,
+		),
 		mustOwnCommit: !readOnly,
 	};
 }
@@ -274,6 +294,7 @@ export class DrizzleCrudAdapter<
 	readonly #table: Table;
 	readonly #columns: DrizzleCrudColumns;
 	readonly #recordKeys: Readonly<Record<string, string>>;
+	readonly #operationIsolationLevel: DrizzleCrudTransactionIsolationLevel | undefined;
 	readonly #transactionRunner:
 		DrizzleCrudTransactionRunner<QueryResult, FullSchema, Schema> | undefined;
 	readonly #rowPredicate: DrizzleCrudRowPredicate<Table> | undefined;
@@ -292,6 +313,7 @@ export class DrizzleCrudAdapter<
 		this.#table = options.table;
 		this.#columns = Object.freeze({ ...options.columns });
 		this.#recordKeys = Object.freeze({ ...options.recordKeys });
+		this.#operationIsolationLevel = options.transaction?.isolationLevel;
 		this.#transactionRunner = options.transactionRunner;
 		this.#rowPredicate =
 			typeof options.rowPredicate === "function"
@@ -316,6 +338,7 @@ export class DrizzleCrudAdapter<
 			context,
 			transactionRequirements(
 				context,
+				this.#operationIsolationLevel,
 				context.operation === "create" ? undefined : this.#rowPredicateIsolationLevel,
 			),
 		);
@@ -330,7 +353,7 @@ export class DrizzleCrudAdapter<
 				context,
 				{
 					accessMode: "read write",
-					isolationLevel: "read committed",
+					isolationLevel: strongestIsolationLevel(this.#operationIsolationLevel),
 					mustOwnCommit: true,
 				},
 				false,
@@ -355,7 +378,10 @@ export class DrizzleCrudAdapter<
 				context,
 				{
 					accessMode: "read only",
-					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					isolationLevel: strongestIsolationLevel(
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: false,
 				},
 				this.#rowPredicate !== undefined,
@@ -386,10 +412,11 @@ export class DrizzleCrudAdapter<
 				context,
 				{
 					accessMode: "read only",
-					isolationLevel:
-						input.count || this.#rowPredicateIsolationLevel === "repeatable read"
-							? "repeatable read"
-							: "read committed",
+					isolationLevel: strongestIsolationLevel(
+						input.count ? "repeatable read" : undefined,
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: false,
 				},
 				input.count || this.#rowPredicate !== undefined,
@@ -424,7 +451,10 @@ export class DrizzleCrudAdapter<
 				context,
 				{
 					accessMode: "read write",
-					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					isolationLevel: strongestIsolationLevel(
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: true,
 				},
 				this.#rowPredicate !== undefined,
@@ -452,7 +482,10 @@ export class DrizzleCrudAdapter<
 				context,
 				{
 					accessMode: "read write",
-					isolationLevel: this.#rowPredicateIsolationLevel ?? "read committed",
+					isolationLevel: strongestIsolationLevel(
+						this.#operationIsolationLevel,
+						this.#rowPredicateIsolationLevel,
+					),
 					mustOwnCommit: true,
 				},
 				this.#rowPredicate !== undefined,
@@ -514,7 +547,11 @@ export class DrizzleCrudAdapter<
 			return work(state.executor, context);
 		}
 
-		if (this.#transactionRunner !== undefined || forceTransaction) {
+		if (
+			this.#transactionRunner !== undefined ||
+			this.#operationIsolationLevel !== undefined ||
+			forceTransaction
+		) {
 			return this.#runTransaction(
 				async (session) =>
 					work(this.#executorFrom(session), {

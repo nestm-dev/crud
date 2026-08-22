@@ -69,6 +69,8 @@ let createSecuredTypeOrmAdapter:
 			rowContexts: CrudAdapterContext[],
 	  ) => CrudAdapter<ItemRecord>)
 	| undefined;
+let createOperationIsolatedTypeOrmAdapter:
+	((observedIsolation: string[]) => CrudAdapter<ItemRecord>) | undefined;
 
 const typeOrmItemSchema = new EntitySchema<ItemRecord>({
 	name: "CrudPgTypeOrmItem",
@@ -322,6 +324,57 @@ async function initializeHarnesses(pgUrl: string): Promise<void> {
 						securedTenantId: "typeorm-secured",
 					}),
 				);
+			},
+		});
+	createOperationIsolatedTypeOrmAdapter = (observedIsolation) =>
+		createTypeOrmCrudAdapter({
+			repository: typeOrmDataSource.getRepository(typeOrmItemSchema),
+			columns: {
+				tenantId: "tenantId",
+				id: "id",
+				name: "name",
+				score: "score",
+				category: "category",
+				createdAt: "createdAt",
+			},
+			transaction: { isolationLevel: "repeatable read" },
+			transactionRunner: {
+				run: async (runnerContext, workWithTransaction) => {
+					const queryRunner = typeOrmDataSource.createQueryRunner();
+					await queryRunner.connect();
+					await queryRunner.startTransaction(
+						runnerContext.isolationLevel === "repeatable read"
+							? "REPEATABLE READ"
+							: "READ COMMITTED",
+					);
+					try {
+						const rows: unknown = await queryRunner.query("SHOW transaction_isolation");
+						const first = Array.isArray(rows) ? rows[0] : undefined;
+						if (
+							typeof first !== "object" ||
+							first === null ||
+							typeof (first as { transaction_isolation?: unknown }).transaction_isolation !==
+								"string"
+						) {
+							throw new Error("PostgreSQL did not report transaction_isolation.");
+						}
+						observedIsolation.push(
+							(first as { transaction_isolation: string }).transaction_isolation,
+						);
+						const result = await workWithTransaction(queryRunner.manager, {
+							accessMode: runnerContext.accessMode,
+							isolationLevel: runnerContext.isolationLevel,
+							ownsCommit: true,
+						});
+						await queryRunner.commitTransaction();
+						return result;
+					} catch (error) {
+						if (queryRunner.isTransactionActive) await queryRunner.rollbackTransaction();
+						throw error;
+					} finally {
+						await queryRunner.release();
+					}
+				},
 			},
 		});
 	harnesses.set("typeorm", {
@@ -1098,5 +1151,28 @@ describe.skipIf(skipPostgres)("PostgreSQL adapter conformance", () => {
 				context("read"),
 			),
 		).resolves.toMatchObject({ id: "hidden", score: 2 });
+	});
+
+	it("starts a create lifecycle at its declared operation-wide isolation", async () => {
+		if (createOperationIsolatedTypeOrmAdapter === undefined) {
+			throw new Error("The operation-isolated TypeORM adapter factory was not initialized.");
+		}
+		const observedIsolation: string[] = [];
+		const adapter = createOperationIsolatedTypeOrmAdapter(observedIsolation);
+		const createContext = context("create");
+		const item = record({
+			tenantId: "operation-isolation",
+			id: "created",
+			name: "operation-isolation-created",
+		});
+
+		await expect(
+			adapter.transaction(
+				(session) => adapter.create({ values: values(item) }, { ...createContext, session }),
+				createContext,
+			),
+		).resolves.toMatchObject({ tenantId: item.tenantId, id: item.id });
+
+		expect(observedIsolation).toEqual(["repeatable read"]);
 	});
 });
