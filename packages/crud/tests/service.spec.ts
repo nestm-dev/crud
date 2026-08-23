@@ -971,6 +971,131 @@ describe("CrudService soft deletion", () => {
 });
 
 describe("CrudService persistence field mapping", () => {
+	it("omits an empty persistence mapper and removes undefined mapper properties", async () => {
+		const resource = defineCrudResource({
+			name: "direct-users",
+			path: "direct-users",
+			itemPath: ":id",
+			idFields: { id: "id" },
+			contracts: {
+				id: z.object({ id: z.coerce.number().int() }),
+				create: z.object({ name: z.string() }),
+				update: z.object({ name: z.string().optional() }),
+				response: z.object({ id: z.number(), name: z.string() }),
+			},
+			operations: crudOperations.all(),
+		});
+		const adapter = new FakeCrudAdapter([{ id: 1, name: "Before" }]);
+		const binding = defineCrudBinding({
+			resource,
+			adapter: { useValue: adapter },
+			fields: ["id", "name"],
+			mappings: {
+				create: (input) => input,
+				update: (input) => input,
+				response: (record) => ({
+					id: requiredNumber(record.id),
+					name: requiredString(record.name),
+				}),
+			},
+		});
+		const service = new CrudService(
+			resource,
+			binding,
+			adapter,
+			[],
+			[],
+			new CrudRegistry(),
+			resolveCrudModuleOptions({}),
+		);
+
+		await expect(service.update({ id: 1 }, { name: undefined })).resolves.toEqual({
+			id: 1,
+			name: "Before",
+		});
+		expect(adapter.snapshot()).toEqual([{ id: 1, name: "Before" }]);
+	});
+
+	it("fails closed before mutation when generated values lack a persistence mapper", async () => {
+		const resource = defineCrudResource({
+			name: "unmapped-scope-users",
+			path: "unmapped-scope-users",
+			itemPath: ":id",
+			idFields: { id: "id" },
+			contracts: {
+				id: z.object({ id: z.coerce.number().int() }),
+				create: z.object({ name: z.string() }),
+				update: z.object({ name: z.string().optional() }),
+				response: z.object({ id: z.number(), name: z.string() }),
+			},
+			operations: crudOperations.all(),
+		});
+		const adapter = new FakeCrudAdapter([{ id: 1, name: "Before" }]);
+		const binding = defineCrudBinding({
+			resource,
+			adapter: { useValue: adapter },
+			fields: ["id", "name"],
+			mappings: {
+				create: (input) => input,
+				update: (input) => input,
+				response: (record) => ({
+					id: requiredNumber(record.id),
+					name: requiredString(record.name),
+				}),
+			},
+		});
+		const scope: CrudScope<typeof resource> = {
+			resolve: () => ({ updateValues: { tenantId: "tenant-a" } }),
+		};
+		const service = new CrudService(
+			resource,
+			binding,
+			adapter,
+			[],
+			[scope],
+			new CrudRegistry(),
+			resolveCrudModuleOptions({}),
+		);
+
+		await expect(service.update({ id: 1 }, { name: "After" })).rejects.toMatchObject({
+			status: 500,
+		});
+		expect(adapter.calls.update).toBe(0);
+		expect(adapter.snapshot()).toEqual([{ id: 1, name: "Before" }]);
+	});
+
+	it("requires a persistence mapper for soft-delete bindings at construction", () => {
+		const adapter = new FakeCrudAdapter();
+		const binding = defineCrudBinding({
+			resource: userResource,
+			adapter: { useValue: adapter },
+			fields: ["id", "name", "tenantId", "deletedAt"],
+			mappings: {
+				create: (input) => ({ name: input.name, tenantId: "tenant-a", deletedAt: null }),
+				update: (input) => input,
+				response: (record) => ({
+					id: requiredNumber(record.id),
+					name: requiredString(record.name),
+					tenantId: requiredString(record.tenantId),
+					deletedAt: null,
+				}),
+			},
+		});
+
+		expect(
+			() =>
+				new CrudService(
+					userResource,
+					binding,
+					adapter,
+					[],
+					[],
+					new CrudRegistry(),
+					resolveCrudModuleOptions({}),
+				),
+		).toThrowError(/must define mappings\.persistence/u);
+	});
+
 	it("maps scoped and soft-delete logical values before every adapter write", async () => {
 		const resource = defineCrudResource({
 			name: "aliased-users",

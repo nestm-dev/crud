@@ -67,6 +67,11 @@ service providers, imports, and service exports while generating no controllers.
 - Binding `scopeCreateFields` declares adapter insert fields supplied by scopes
   or nested paths through `mappings.scopeCreate`. Only declared fields may be omitted by
   `mappings.create`; missing declared values fail closed before adapter create.
+- Mapping callbacks may return explicit `undefined` for optional Standard Schema
+  properties; CRUD removes those properties before invoking an adapter.
+  `mappings.persistence` is optional while generated scope/soft-delete values
+  are empty, but non-empty values without that mapper fail closed. Soft-delete
+  resources require it at service construction.
 - `enhancers.decorators` carries opaque Nest class decorators at resource level
   and method decorators at operation or `queryDeletedEnhancers` level. This lets
   integrations attach authorization metadata without coupling CRUD to them.

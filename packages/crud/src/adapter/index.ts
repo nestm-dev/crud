@@ -10,6 +10,7 @@ export {
 	type CrudBindingMappings,
 	type CrudBindingUpsertOptions,
 	type CrudCreateMappingValues,
+	type CrudMappingValues,
 	type CrudScopeCreateField,
 	type CompleteCrudFieldSelection,
 	type DefineCrudBindingOptions,

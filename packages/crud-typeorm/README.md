@@ -26,16 +26,16 @@ const usersBinding = bindTypeOrmCrud({
 	mappings: {
 		create: (input) => input,
 		update: (input) => input,
-		// Maps framework-generated scope/soft-delete values to entity keys.
-		persistence: (values) => values,
 		response: (record, relations) => ({ ...record, ...relations }),
 	},
 });
 ```
 
 `columns` maps CRUD logical fields to entity property paths. It must cover every
-field listed by the binding. `mappings.persistence` is separate because scopes
-and soft delete generate logical values outside create/update input mappings.
+field listed by the binding. Define `mappings.persistence` when scopes or soft
+delete generate logical values outside create/update input mappings; it may be
+omitted when those generated values are always empty. CRUD removes explicitly
+undefined optional mapper properties before invoking the adapter.
 Native `rowPredicate` parameters must not use the adapter-reserved `crud_<n>`
 names; a collision is rejected before the statement executes.
 
