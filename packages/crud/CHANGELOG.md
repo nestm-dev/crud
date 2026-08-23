@@ -1,5 +1,14 @@
 # @nestm/crud
 
+## 0.1.0-alpha.9
+
+### Minor Changes
+
+- 9f5135f: Allow binding mappers to return Standard Schema optional properties directly;
+  CRUD removes explicitly undefined optional values before invoking adapters.
+  Make `mappings.persistence` optional when the framework contributes no scope or
+  soft-delete update values, while failing closed for non-empty unmapped values.
+
 ## 0.1.0-alpha.8
 
 ### Minor Changes

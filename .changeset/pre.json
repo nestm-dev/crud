@@ -14,6 +14,8 @@
 		"headless-crud-features",
 		"initial-crud-alpha",
 		"nested-resources-atomic-upsert",
+		"operation-wide-transaction-isolation",
+		"schema-owned-binding-mappings",
 		"swagger-filter-builder",
 		"transactional-reference-validation",
 		"typeorm-scoped-transactions",

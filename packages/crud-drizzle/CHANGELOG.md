@@ -1,5 +1,20 @@
 # @nestm/crud-drizzle
 
+## 0.1.0-alpha.9
+
+### Minor Changes
+
+- c3cf5ac: Add an operation-wide transaction isolation requirement so scopes, lifecycle
+  hooks, validators, mappings, projections, and persistence start inside a
+  sufficiently strong transaction. This prevents snapshot-sensitive nested work
+  from attempting an unsafe mid-transaction isolation promotion, including during
+  create operations.
+
+### Patch Changes
+
+- Updated dependencies [9f5135f]
+  - @nestm/crud@0.1.0-alpha.9
+
 ## 0.1.0-alpha.8
 
 ### Patch Changes
