@@ -170,8 +170,7 @@ const selectedBinding = bindTypeOrmCrud({
 	fields: ["id", "name"],
 	mappings: {
 		create: (input) => ({ name: input.name, tenantId: "tenant", secret: "encrypted" }),
-		update: (input) => (input.name === undefined ? {} : { name: input.name }),
-		persistence: () => ({}),
+		update: (input) => input,
 		response: (record) => {
 			void record.id;
 			void record.name;

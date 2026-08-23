@@ -13,8 +13,13 @@ import type {
 	CrudAdapter,
 	CrudAdapterContext,
 	CrudAdapterSession,
+	CrudValues,
 } from "../adapter/adapter.types.ts";
-import type { CrudResourceBinding, CrudScopeCreateField } from "../adapter/binding.types.ts";
+import type {
+	CrudMappingValues,
+	CrudResourceBinding,
+	CrudScopeCreateField,
+} from "../adapter/binding.types.ts";
 import { encodeCrudCursor } from "../cursor/cursor.ts";
 import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
 import type { ResolvedCrudModuleOptions } from "../module/crud-module.options.ts";
@@ -144,12 +149,16 @@ export class CrudService<
 					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
 					const scoped =
 						this.binding.mappings.scopeCreate === undefined
-							? await this.binding.mappings.persistence(scopeCreateValues)
+							? await this.mapPersistenceValues(scopeCreateValues)
 							: await this.binding.mappings.scopeCreate(scopeCreateValues);
 					this.assertScopeCreateFields(scoped);
 					// The runtime assertion above establishes the generic Pick that TypeScript cannot
-					// normalize back into an arbitrary adapter-defined CreateValues subtype.
-					const values = { ...mapped, ...scoped } as CreateValues;
+					// normalize back into an arbitrary adapter-defined CreateValues subtype. The
+					// final normalization removes explicitly undefined optional mapper properties.
+					const values = normalizeCrudMappingValues<CreateValues>({
+						...mapped,
+						...scoped,
+					} as CrudMappingValues<CreateValues>);
 					const record = await this.adapter.create({ values }, this.adapterContext(context));
 					for (const hook of this.hooks) {
 						await hook.afterCreate?.(record, context);
@@ -302,9 +311,15 @@ export class CrudService<
 						);
 					}
 					const mapped = await this.binding.mappings.update(value);
-					const scoped = await this.binding.mappings.persistence(scope.updateValues ?? {});
+					const scoped = await this.mapPersistenceValues(scope.updateValues ?? {});
 					const record = await this.adapter.update(
-						{ predicate, values: { ...mapped, ...scoped } },
+						{
+							predicate,
+							values: normalizeCrudMappingValues<UpdateValues>({
+								...mapped,
+								...scoped,
+							} as CrudMappingValues<UpdateValues>),
+						},
 						this.adapterContext(context),
 					);
 					if (record === null) throw this.notFound();
@@ -374,10 +389,13 @@ export class CrudService<
 					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
 					const scoped =
 						mappings.scopeCreate === undefined
-							? await mappings.persistence(scopeCreateValues)
+							? await this.mapPersistenceValues(scopeCreateValues)
 							: await mappings.scopeCreate(scopeCreateValues);
 					this.assertScopeCreateFields(scoped);
-					const values = { ...mapped, ...scoped } as CreateValues;
+					const values = normalizeCrudMappingValues<CreateValues>({
+						...mapped,
+						...scoped,
+					} as CrudMappingValues<CreateValues>);
 					const record = await adapterUpsert(
 						{
 							conflictFields: config.conflictFields,
@@ -440,7 +458,7 @@ export class CrudService<
 							: await this.adapter.update(
 									{
 										predicate,
-										values: await this.binding.mappings.persistence({
+										values: await this.mapPersistenceValues({
 											[this.resource.softDelete.field]:
 												this.resource.softDelete.deleteValue?.(context) ?? new Date(),
 										}),
@@ -499,7 +517,7 @@ export class CrudService<
 						);
 					}
 					const value = softDelete.restoreValue?.(context) ?? null;
-					const persistenceValues = await this.binding.mappings.persistence({
+					const persistenceValues = await this.mapPersistenceValues({
 						[softDelete.field]: value,
 					});
 					const record = await this.adapter.update(
@@ -921,6 +939,20 @@ export class CrudService<
 		return values;
 	}
 
+	private async mapPersistenceValues(values: CrudValues): Promise<UpdateValues> {
+		if (this.binding.mappings.persistence === undefined) {
+			if (Object.keys(values).length > 0) {
+				throw new TypeError(
+					`CRUD binding for "${this.resource.name}" must define mappings.persistence before scopes or soft delete can contribute update values.`,
+				);
+			}
+			return {} as UpdateValues;
+		}
+		return normalizeCrudMappingValues<UpdateValues>(
+			await this.binding.mappings.persistence(values),
+		);
+	}
+
 	private operationContext(
 		operation: CrudOperationName,
 		executionContext?: ExecutionContext,
@@ -1017,10 +1049,11 @@ export class CrudService<
 	}
 
 	private assertScopeCreateFields(
-		scoped: UpdateValues | Partial<Pick<CreateValues, ScopeCreateField>>,
-	): asserts scoped is Pick<CreateValues, ScopeCreateField> {
+		scoped: UpdateValues | CrudMappingValues<Partial<Pick<CreateValues, ScopeCreateField>>>,
+	): void {
+		const values = scoped as Readonly<Record<string, unknown>>;
 		for (const field of this.binding.scopeCreateFields ?? []) {
-			if (!Object.hasOwn(scoped, field)) {
+			if (!Object.hasOwn(values, field) || values[field] === undefined) {
 				throw new TypeError(
 					`CRUD scope for "${this.resource.name}" did not supply configured create field "${field}".`,
 				);
@@ -1065,6 +1098,11 @@ export class CrudService<
 		}
 		if (mutates && !this.adapter.capabilities.returning) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks returning mutations.`);
+		}
+		if (this.resource.softDelete !== undefined && this.binding.mappings.persistence === undefined) {
+			throw new TypeError(
+				`Soft-delete CRUD binding for "${this.resource.name}" must define mappings.persistence.`,
+			);
 		}
 		if (
 			this.resource.pathParams !== undefined &&
@@ -1131,6 +1169,18 @@ export class CrudService<
 			}
 		}
 	}
+}
+
+function normalizeCrudMappingValues<Values extends object>(
+	values: CrudMappingValues<Values>,
+): Values {
+	const normalized = { ...values } as Record<PropertyKey, unknown>;
+	for (const field of Reflect.ownKeys(normalized)) {
+		if (normalized[field] === undefined) delete normalized[field];
+	}
+	// CrudMappingValues only widens optional properties with `undefined`; deleting
+	// those properties restores the adapter's exact-optional Values contract.
+	return normalized as Values;
 }
 
 function uniqueTuples(tuples: readonly (readonly unknown[])[]): readonly (readonly unknown[])[] {

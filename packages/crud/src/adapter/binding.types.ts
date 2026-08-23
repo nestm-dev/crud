@@ -44,7 +44,27 @@ export type CrudScopeCreateField<
 export type CrudCreateMappingValues<
 	CreateValues extends object,
 	ScopeCreateField extends keyof CreateValues = never,
-> = Omit<CreateValues, ScopeCreateField> & Partial<Pick<CreateValues, ScopeCreateField>>;
+> = CrudMappingValues<
+	Omit<CreateValues, ScopeCreateField> & Partial<Pick<CreateValues, ScopeCreateField>>
+>;
+
+/**
+ * Adapter values accepted from a mapping callback before CRUD removes
+ * explicitly `undefined` optional properties.
+ *
+ * Standard Schema outputs commonly represent an optional property as
+ * `field?: Value | undefined`, while persistence models compiled with
+ * `exactOptionalPropertyTypes` represent the same value as `field?: Value`.
+ * Mappers may return either form; CRUD normalizes the former before invoking
+ * the adapter without weakening required persistence properties.
+ */
+export type CrudMappingValues<Values extends object> = Values extends object
+	? {
+			[Field in keyof Values]: object extends Pick<Values, Field>
+				? Values[Field] | undefined
+				: Values[Field];
+		}
+	: never;
 
 export interface CrudBindingMappings<
 	Resource extends AnyCrudResource = AnyCrudResource,
@@ -68,9 +88,11 @@ export interface CrudBindingMappings<
 	scopeCreate?(
 		values: CrudValues,
 	):
-		| Partial<Pick<CreateValues, ScopeCreateField>>
-		| Promise<Partial<Pick<CreateValues, ScopeCreateField>>>;
-	update(input: CrudUpdate<Resource>): UpdateValues | Promise<UpdateValues>;
+		| CrudMappingValues<Partial<Pick<CreateValues, ScopeCreateField>>>
+		| Promise<CrudMappingValues<Partial<Pick<CreateValues, ScopeCreateField>>>>;
+	update(
+		input: CrudUpdate<Resource>,
+	): CrudMappingValues<UpdateValues> | Promise<CrudMappingValues<UpdateValues>>;
 	/** Maps an upsert request and its complete identity to one proposed persistence row. */
 	upsert?(
 		id: CrudId<Resource>,
@@ -82,7 +104,9 @@ export interface CrudBindingMappings<
 	 * Maps framework-generated logical update values (explicit scope `updateValues`
 	 * and soft delete) to the adapter's update input.
 	 */
-	persistence(values: CrudValues): UpdateValues | Promise<UpdateValues>;
+	persistence?(
+		values: CrudValues,
+	): CrudMappingValues<UpdateValues> | Promise<CrudMappingValues<UpdateValues>>;
 	/**
 	 * `projected` carries the merged output of the resource's {@link CrudProjection}s for this
 	 * record, or `undefined` when the resource declares none. A two-argument implementation stays

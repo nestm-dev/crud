@@ -90,7 +90,6 @@ const usersBinding = bindMemoryCrud({
 	mappings: {
 		create: (input) => input,
 		update: (input) => input,
-		persistence: (values) => values,
 		response: (record) => record,
 	},
 });
@@ -552,11 +551,16 @@ full-row reload during mutations. All primary columns must be selected. Entity
 constructors and load listeners can still add runtime properties; see the
 package README for the query-builder lifecycle tradeoffs.
 
-Every binding supplies four required mappings: `create` and `update` map API
-values, `persistence` maps framework-generated update/soft-delete values, and
-`response` maps a record plus loaded relations into the response-schema input.
-Scoped bindings should additionally define `scopeCreate` to map their logical
-create values to adapter insert fields.
+Every binding supplies `create` and `update` mappings for API values and a
+`response` mapping from a record plus loaded relations into the response-schema
+input. Optional Standard Schema properties may be returned as explicit
+`undefined`; CRUD removes those properties before passing mapped values to an
+adapter. Define `persistence` when scopes or soft deletion generate logical
+update values. It may be omitted when those values are always empty; a non-empty
+unmapped value fails closed instead of being silently discarded. Soft-delete
+bindings require the mapping during service construction. Scoped bindings
+should additionally define `scopeCreate` to map their logical create values to
+adapter insert fields.
 
 When a scope owns required insert columns such as `tenantId` or `ownerId`, set
 `scopeCreateFields: ["tenantId", "ownerId"]`. Only those declared fields become
