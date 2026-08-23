@@ -58,7 +58,7 @@
 		"cross-env": "10.1.0",
 		"drizzle-orm": "0.45.2",
 		"express": "5.2.1",
-		"fastify": "5.11.2",
+		"fastify": "5.12.1",
 		"oxlint": "1.77.0",
 		"oxlint-tsgolint": "7.0.2001",
 		"pg": "8.22.0",
