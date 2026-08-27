@@ -9,8 +9,8 @@ installation, a full resource example, HTTP/query contracts, custom-controller
 injection, and adapter guidance.
 
 > [!CAUTION]
-> This is a `0.1` alpha for the NestJS 12 prerelease line. SQL adapters are
-> certified for PostgreSQL only.
+> This is a `0.1` alpha targeting stable NestJS 12. SQL adapters are certified
+> for PostgreSQL only.
 
 ## Required application wiring
 
@@ -110,8 +110,8 @@ Public subpaths:
 - `@nestm/crud/testing` — adapter conformance cases and the explicitly insecure
   test-only cursor codec.
 
-This package is ESM-only, requires Node.js 22.12 or newer, and targets the
-NestJS 12 prerelease line. `createCrudAdapterConformanceCases` and
+This package is ESM-only, requires Node.js 22.12 or newer, and targets stable
+NestJS 12. `createCrudAdapterConformanceCases` and
 `runCrudAdapterConformance` help adapter authors certify the shared contract;
 `InsecureCrudCursorCodec` must never be used outside tests.
 

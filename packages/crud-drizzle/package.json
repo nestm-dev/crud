@@ -45,7 +45,7 @@
 		"@nestm/crud": "workspace:^"
 	},
 	"peerDependencies": {
-		"@nestjs/common": "^12.0.0-alpha.5",
+		"@nestjs/common": "^12.0.0",
 		"drizzle-orm": ">=0.45.0 <0.46.0"
 	},
 	"scripts": {

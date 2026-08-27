@@ -4,9 +4,8 @@ Type-safe, generated CRUD controllers for NestJS 12, with a stable adapter SPI
 for memory, TypeORM, Drizzle ORM, and Prisma.
 
 > [!CAUTION]
-> NestJS 12 and this project are prerelease software. The package API may change
-> between alpha releases. The ORM packages certify PostgreSQL only in the first
-> alpha.
+> This project remains prerelease software. The package API may change between
+> alpha releases. The ORM packages certify PostgreSQL only in the first alpha.
 
 ## Packages
 
@@ -16,7 +15,7 @@ for memory, TypeORM, Drizzle ORM, and Prisma.
 | `@nestm/crud-memory`  | Copy-on-write transactional adapter for tests and ephemeral services                                |
 | `@nestm/crud-typeorm` | PostgreSQL adapter for TypeORM 1.1                                                                  |
 | `@nestm/crud-drizzle` | PostgreSQL adapter for Drizzle ORM 0.45                                                             |
-| `@nestm/crud-prisma`  | PostgreSQL adapter for Prisma 7.9                                                                   |
+| `@nestm/crud-prisma`  | PostgreSQL adapter for Prisma 7.10                                                                  |
 
 By default, the package generates ordinary Nest controllers during synchronous
 `CrudModule.forFeature()` construction. Set `generateControllers: false` for a
@@ -32,9 +31,9 @@ pnpm add @nestm/crud@alpha @nestm/crud-memory@alpha
 pnpm add @nestm/standard-schema@alpha @standard-schema/spec @nestjs/swagger
 ```
 
-Install and pin the NestJS 12 prerelease packages tested by your application.
-This workspace currently tests `12.0.0-alpha.5`. `@nestm/standard-schema` and
-`@nestjs/swagger` are required peers, not optional integrations.
+Install and pin the stable NestJS 12 packages tested by your application. This
+workspace currently tests `12.0.1`. `@nestm/standard-schema` and `@nestjs/swagger`
+are required peers, not optional integrations.
 
 ## Quick start
 
@@ -541,7 +540,7 @@ Application binders are `bindMemoryCrud`, `bindTypeOrmCrud`,
 `useClass`, `useExisting`, or `useFactory` adapter providers. The SQL binders
 never create, initialize, connect, disconnect, or destroy consumer-owned
 repositories and clients. In the first alpha, TypeORM 1.1.x, Drizzle 0.45.x,
-and Prisma 7.9.x are certified against PostgreSQL only.
+and Prisma 7.10.x are certified against PostgreSQL only.
 
 The TypeORM adapter also accepts a native `select` object for resources backed
 by entities with sensitive or operational columns. Selected mode narrows both

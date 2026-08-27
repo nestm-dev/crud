@@ -1,6 +1,6 @@
 # Contributing
 
-This project is an experimental NestJS 12 alpha. Please discuss substantial API
+This project is an experimental alpha targeting stable NestJS 12. Please discuss substantial API
 or adapter-SPI changes before implementing them, because all five packages are
 released in lockstep.
 

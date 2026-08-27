@@ -59,13 +59,14 @@ jobs:
         env:
           PG_URL: postgres://nestm:nestm@localhost:5432/nestm_crud
       - name: Create release PR or publish
-        uses: changesets/action@v1
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
-          publish: pnpm run release
-          version: pnpm run release:version
-          title: "chore: release @nestm/crud"
-          commit: "chore: release @nestm/crud"
-          createGithubReleases: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          publish-script: pnpm run release
+          version-script: pnpm run release:version
+          pr-title: "chore: release @nestm/crud"
+          commit-message: "chore: release @nestm/crud"
+          create-github-releases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Reconcile package tags

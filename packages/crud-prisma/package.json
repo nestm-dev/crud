@@ -45,8 +45,8 @@
 		"@nestm/crud": "workspace:^"
 	},
 	"peerDependencies": {
-		"@nestjs/common": "^12.0.0-alpha.5",
-		"@prisma/client": ">=7.9.0 <7.10.0"
+		"@nestjs/common": "^12.0.0",
+		"@prisma/client": ">=7.10.0 <7.11.0"
 	},
 	"scripts": {
 		"build": "tsdown",
