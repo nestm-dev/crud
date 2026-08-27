@@ -1,24 +1,4 @@
 {
 	"mode": "pre",
-	"tag": "alpha",
-	"initialVersions": {
-		"@nestm/crud": "0.1.0-alpha.0",
-		"@nestm/crud-memory": "0.1.0-alpha.0",
-		"@nestm/crud-typeorm": "0.1.0-alpha.0",
-		"@nestm/crud-drizzle": "0.1.0-alpha.0",
-		"@nestm/crud-prisma": "0.1.0-alpha.0"
-	},
-	"changesets": [
-		"batch-response-projections",
-		"drizzle-transaction-boundaries",
-		"headless-crud-features",
-		"initial-crud-alpha",
-		"nested-resources-atomic-upsert",
-		"operation-wide-transaction-isolation",
-		"schema-owned-binding-mappings",
-		"swagger-filter-builder",
-		"transactional-reference-validation",
-		"typeorm-scoped-transactions",
-		"typeorm-selected-records"
-	]
+	"tag": "alpha"
 }

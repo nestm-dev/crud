@@ -1,6 +1,6 @@
 # `@nestm/crud-prisma`
 
-PostgreSQL-first Prisma 7.9 adapter for [`@nestm/crud`](../crud). It compiles the
+PostgreSQL-first Prisma 7.10 adapter for [`@nestm/crud`](../crud). It compiles the
 neutral CRUD AST to generated delegate `where` and `orderBy` inputs, uses
 interactive transactions, handles native compound unique selectors, and
 sanitizes Prisma/database failures.
