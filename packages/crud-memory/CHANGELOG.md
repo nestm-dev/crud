@@ -1,5 +1,13 @@
 # @nestm/crud-memory
 
+## 0.1.0-alpha.10
+
+### Patch Changes
+
+- 67503c2: Declare stable NestJS 12 peer support and certify the Prisma adapter against Prisma 7.10.
+- Updated dependencies [67503c2]
+  - @nestm/crud@0.1.0-alpha.10
+
 ## 0.1.0-alpha.9
 
 ### Patch Changes
