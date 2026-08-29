@@ -7,8 +7,9 @@ import {
 	DataSource,
 	Entity,
 	type Logger,
-	PrimaryColumn,
+	PrimaryGeneratedColumn,
 	type QueryRunner,
+	Unique,
 	type ValueTransformer,
 } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -34,14 +35,18 @@ const secretTransformer: ValueTransformer = {
 };
 
 @Entity({ name: TABLE, synchronize: false })
+@Unique("crud_pg_typeorm_upsert_items_identity_unique", ["tenantId", "viewerUserId", "serverId"])
 class UpsertItem {
-	@PrimaryColumn({ name: "tenant_id", type: "text" })
+	@PrimaryGeneratedColumn("uuid", { name: "id" })
+	readonly id!: string;
+
+	@Column({ name: "tenant_id", type: "text" })
 	readonly tenantId!: string;
 
-	@PrimaryColumn({ name: "viewer_user_id", type: "text" })
+	@Column({ name: "viewer_user_id", type: "text" })
 	readonly viewerUserId!: string;
 
-	@PrimaryColumn({ name: "server_id", type: "text" })
+	@Column({ name: "server_id", type: "text" })
 	readonly serverId!: string;
 
 	@Column({ name: "display_name", type: "text", transformer: visibleTransformer })
@@ -72,6 +77,7 @@ class QueryCaptureLogger implements Logger {
 }
 
 const COLUMNS = {
+	id: "id",
 	tenantId: "tenantId",
 	viewerUserId: "viewerUserId",
 	serverId: "serverId",
@@ -93,6 +99,7 @@ function selectedAdapter(authorizedTenant = "tenant-a") {
 		repository: source().getRepository(UpsertItem),
 		columns: COLUMNS,
 		select: {
+			id: true,
 			tenantId: true,
 			viewerUserId: true,
 			serverId: true,
@@ -169,13 +176,15 @@ describe.skipIf(skipPostgres)("TypeORM atomic upsert", () => {
 		await adminPool.query(`
 			DROP TABLE IF EXISTS ${TABLE};
 			CREATE TABLE ${TABLE} (
+				id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 				tenant_id text NOT NULL,
 				viewer_user_id text NOT NULL,
 				server_id text NOT NULL,
 				display_name text NOT NULL,
 				allowed_tools jsonb,
 				secret_ciphertext text NOT NULL,
-				PRIMARY KEY (tenant_id, viewer_user_id, server_id)
+				CONSTRAINT crud_pg_typeorm_upsert_items_identity_unique
+					UNIQUE (tenant_id, viewer_user_id, server_id)
 			)
 		`);
 		dataSource = await new DataSource({
@@ -278,6 +287,7 @@ describe.skipIf(skipPostgres)("TypeORM atomic upsert", () => {
 			repository: source().getRepository(UpsertItem),
 			columns: COLUMNS,
 			select: {
+				id: true,
 				tenantId: true,
 				viewerUserId: true,
 				serverId: true,

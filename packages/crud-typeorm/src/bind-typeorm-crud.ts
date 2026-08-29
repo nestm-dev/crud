@@ -57,7 +57,7 @@ interface BindTypeOrmCrudOptionsBase<
 	 * so a field expressible there is a field a client can change.
 	 */
 	readonly scopeCreateFields?: ScopeCreateFields;
-	/** Atomic upsert primary-conflict and mutable-overwrite persistence paths. */
+	/** Atomic upsert conflict-target and mutable-overwrite persistence paths. */
 	readonly upsert?: CrudBindingUpsertOptions;
 	/** Standard Nest provider form for an adapter; injected repositories remain application-owned. */
 	readonly adapter: TypeOrmCrudAdapterProvider<EntityType, RecordType>;
