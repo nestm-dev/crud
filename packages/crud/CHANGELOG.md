@@ -1,5 +1,11 @@
 # @nestm/crud
 
+## 0.1.0-alpha.12
+
+### Minor Changes
+
+- 856fe97: Keep list, read, and relation response lifecycles inside adapter transactions, and add explicit idempotent missing-row behavior for generated delete operations.
+
 ## 0.1.0-alpha.11
 
 ## 0.1.0-alpha.10
