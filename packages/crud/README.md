@@ -54,6 +54,14 @@ service providers, imports, and service exports while generating no controllers.
   `createValues` apply only to inserts; a scope must opt into update overwrites
   with distinct `updateValues`. Before/after mutation hooks run in the
   transaction; `afterCommit` failures go to the configured error sink.
+- List and read transactions cover scope resolution, adapter reads, relation
+  target reads, projections, response mapping, and cursor creation. Relation
+  target adapters use their own propagated transaction, so application runners
+  can join them to an ambient transaction when a shared database snapshot is
+  required.
+- Delete returns `404` for an absent or scope-hidden row by default. Configure
+  `operations.delete.missing` as `"ignore"` for an idempotent `204`; no mutation
+  hooks, validators, or `afterCommit` event run when there is no visible row.
 - Mutation `validators` are injected in declaration order and run inside the
   adapter-owned transaction after `beforeCreate`, `beforeUpdate`, or
   `beforeUpsert` has produced the final domain input and after an existing
@@ -80,17 +88,20 @@ service providers, imports, and service exports while generating no controllers.
   TypeORM/PostgreSQL is the currently certified bundled implementation.
 
 Invalid inputs, queries, and cursors map to `400`, scope-hidden and absent rows
-to `404`, unique conflicts to `409`, over-bound includes to `422`, and sanitized
-unexpected adapter or transactional-hook failures to `500`. Mapped conflict
-and constraint exceptions retain their `CrudAdapterError` as the internal
-`cause`, so custom facades can distinguish retryable conflicts without parsing
-or exposing persistence messages.
+to `404` unless an idempotent delete ignores them, unique conflicts to `409`,
+over-bound includes to `422`, and sanitized unexpected adapter, projection,
+mapping, or transactional-hook failures to `500`. Mapped conflict and constraint
+exceptions retain their `CrudAdapterError` as the internal `cause`, so custom
+facades can distinguish retryable conflicts without parsing or exposing
+persistence messages.
 
 Adapter `transaction()` implementations must resolve only after the transaction
-they own has really committed. A savepoint or joined ambient transaction cannot
-satisfy this contract for mutations because CRUD runs `afterCommit` immediately
-after `transaction()` resolves. `isCrudAdapterError()` is the cross-package-copy
-error discriminator for adapter and integration authors.
+they own has really committed. CRUD wraps complete list, read, relation-read,
+and mutation lifecycles in this method. A savepoint or joined ambient
+transaction cannot satisfy the ownership contract for mutations because CRUD
+runs `afterCommit` immediately after `transaction()` resolves.
+`isCrudAdapterError()` is the cross-package-copy error discriminator for adapter
+and integration authors.
 
 For a fully custom compatibility controller, register the binding with
 `CrudModule.forFeature({ resources: [binding], generateControllers: false })`

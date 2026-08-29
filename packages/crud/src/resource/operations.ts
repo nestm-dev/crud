@@ -33,7 +33,19 @@ export interface CrudOperationOptions extends CrudEnhancers {
 	readonly deprecated?: boolean;
 }
 
-export type CrudOperations = Partial<Record<CrudOperationName, CrudOperationOptions>>;
+export type CrudDeleteMissingBehavior = "not-found" | "ignore";
+
+export interface CrudDeleteOperationOptions extends CrudOperationOptions {
+	/** Behavior when no visible row matches the requested identity. Defaults to `not-found`. */
+	readonly missing?: CrudDeleteMissingBehavior;
+}
+
+export type CrudOperationOptionsFor<Operation extends CrudOperationName> =
+	Operation extends "delete" ? CrudDeleteOperationOptions : CrudOperationOptions;
+
+export type CrudOperations = {
+	[Operation in CrudOperationName]?: CrudOperationOptionsFor<Operation>;
+};
 
 function operationMap(names: readonly CrudOperationName[]): CrudOperations {
 	return Object.fromEntries(names.map((name) => [name, {}])) as CrudOperations;

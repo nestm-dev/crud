@@ -75,6 +75,21 @@ function assertResourceDefinition(definition: CrudResourceDefinition): void {
 				`CRUD resource "${definition.name}" operation "${operation}" must be configured with an options object.`,
 			);
 		}
+		if (operation !== "delete" && Object.hasOwn(options, "missing")) {
+			throw new TypeError(
+				`CRUD resource "${definition.name}" operation "${operation}" cannot configure missing-row behavior.`,
+			);
+		}
+		if (
+			operation === "delete" &&
+			options.missing !== undefined &&
+			options.missing !== "not-found" &&
+			options.missing !== "ignore"
+		) {
+			throw new TypeError(
+				`CRUD resource "${definition.name}" operation "delete" missing must be "not-found" or "ignore".`,
+			);
+		}
 	}
 	if (!isRecord(definition.contracts)) {
 		throw new TypeError(`CRUD resource "${definition.name}" must declare contract schemas.`);

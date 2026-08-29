@@ -210,6 +210,23 @@ describe("generated CRUD controller metadata", () => {
 		expect(Object.keys(deleteResponses)).toEqual(expect.arrayContaining(["204", "400", "404"]));
 	});
 
+	it("omits a delete 404 response when missing rows are explicitly ignored", () => {
+		const resource = defineCrudResource({
+			...routeResource,
+			name: "idempotent-billing-items",
+			path: "idempotent-billing-items",
+			operations: { delete: { missing: "ignore" } },
+		});
+		const controller = createCrudController(resource);
+		const responses = Reflect.getMetadata(
+			"swagger/apiResponse",
+			controller.prototype.delete,
+		) as Record<string, unknown>;
+
+		expect(Object.keys(responses)).toEqual(expect.arrayContaining(["204", "400", "409", "500"]));
+		expect(responses["404"]).toBeUndefined();
+	});
+
 	it("documents exact offset-only, cursor-only, and dual pagination parameters", () => {
 		const cursorOnly = defineCrudResource({
 			...routeResource,

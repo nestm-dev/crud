@@ -39,6 +39,7 @@ import type {
 	CrudEnhancers,
 	CrudOperationName,
 	CrudOperationOptions,
+	CrudDeleteOperationOptions,
 } from "../resource/operations.ts";
 import type { CrudService } from "../runtime/crud.service.ts";
 import type { CrudCollectionArgs } from "../runtime/runtime.types.ts";
@@ -150,7 +151,7 @@ function decorateOperation(
 	controller: CrudController,
 	resource: AnyCrudResource,
 	operation: CrudOperationName,
-	options: CrudOperationOptions,
+	options: CrudOperationOptions | CrudDeleteOperationOptions,
 ): void {
 	const descriptor = Object.getOwnPropertyDescriptor(controller.prototype, operation);
 	if (descriptor === undefined)
@@ -194,7 +195,7 @@ function decorateOperation(
 	);
 
 	decorateParameters(controller, resource, operation);
-	decorateResponse(controller, resource, operation, descriptor);
+	decorateResponse(controller, resource, operation, options, descriptor);
 	decorateSwaggerQueries(controller, resource, operation, descriptor);
 	if (operation === "list") {
 		applyEnhancers(
@@ -261,6 +262,7 @@ function decorateResponse(
 	controller: CrudController,
 	resource: AnyCrudResource,
 	operation: CrudOperationName,
+	options: CrudOperationOptions | CrudDeleteOperationOptions,
 	descriptor: PropertyDescriptor,
 ): void {
 	const responseSchema =
@@ -293,6 +295,7 @@ function decorateResponse(
 	for (const [status, description] of errorResponses(
 		operation,
 		Object.keys(resource.relations ?? {}).length > 0,
+		operation === "delete" && "missing" in options && options.missing === "ignore",
 	)) {
 		applyMethod(
 			ApiResponse({ status, description, schema: createNestErrorResponseSchema(status) }),
@@ -438,11 +441,12 @@ function defaultSummary(resource: string, operation: CrudOperationName): string 
 function errorResponses(
 	operation: CrudOperationName,
 	hasRelations: boolean,
+	ignoresMissingDelete: boolean,
 ): readonly (readonly [CrudSwaggerErrorStatus, string])[] {
 	const responses: [CrudSwaggerErrorStatus, string][] = [
 		[HttpStatus.BAD_REQUEST, "Invalid request."],
 	];
-	if (!["create", "list"].includes(operation)) {
+	if (!["create", "list"].includes(operation) && !ignoresMissingDelete) {
 		responses.push([HttpStatus.NOT_FOUND, "Resource not found."]);
 	}
 	if (["create", "update", "delete", "restore", "upsert"].includes(operation)) {
