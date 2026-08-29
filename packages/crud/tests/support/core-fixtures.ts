@@ -7,6 +7,7 @@ import { crudOperations } from "../../src/resource/operations.ts";
 import type {
 	CrudLifecycleHook,
 	CrudMutationValidator,
+	CrudProjection,
 	CrudScope,
 } from "../../src/runtime/runtime.types.ts";
 import { CrudRegistry } from "../../src/runtime/crud-registry.ts";
@@ -90,6 +91,7 @@ export interface CreateUserServiceOptions {
 	readonly hooks?: readonly CrudLifecycleHook<typeof userResource>[];
 	readonly scopes?: readonly CrudScope<typeof userResource>[];
 	readonly validators?: readonly CrudMutationValidator<typeof userResource>[];
+	readonly projections?: readonly CrudProjection<typeof userResource>[];
 	readonly registry?: CrudRegistry;
 	readonly afterCommitErrorHandler?: Parameters<
 		typeof resolveCrudModuleOptions
@@ -114,7 +116,7 @@ export function createUserService(options: CreateUserServiceOptions = {}) {
 		registry,
 		resolved,
 		undefined,
-		[],
+		options.projections ?? [],
 		options.validators ?? [],
 	);
 	return { adapter, binding, registry, service };

@@ -77,9 +77,10 @@ export interface CrudAdapter<
 > {
 	readonly capabilities: CrudAdapterCapabilities;
 	/**
-	 * Runs work in a transaction and resolves only after the real commit succeeds.
-	 * A mutation must not resolve after merely releasing a savepoint or joining an
-	 * ambient transaction because CRUD emits `afterCommit` after this promise.
+	 * Runs one complete read or mutation lifecycle in a transaction. It resolves only
+	 * after the real commit succeeds. A mutation must not resolve after merely releasing
+	 * a savepoint or joining an ambient transaction because CRUD emits `afterCommit`
+	 * after this promise.
 	 */
 	transaction<Result>(
 		work: (session: CrudAdapterSession) => Promise<Result>,

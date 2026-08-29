@@ -6,7 +6,7 @@ import type { CrudAdapter } from "../src/adapter/adapter.types.ts";
 import { defineCrudBinding, type CrudResourceBinding } from "../src/adapter/binding.types.ts";
 import { defineCrudFactoryProvider } from "../src/module/factory-provider.types.ts";
 import { defineCrudResource } from "../src/resource/define-resource.ts";
-import { crudOperations } from "../src/resource/operations.ts";
+import { crudOperations, type CrudOperations } from "../src/resource/operations.ts";
 import { CrudModule, type CrudModuleAsyncOptions } from "../src/module/crud.module.ts";
 import { getCrudServiceToken, type CrudServiceToken } from "../src/module/crud.tokens.ts";
 import type {
@@ -45,6 +45,14 @@ export const typedResource = defineCrudResource({
 	},
 	operations: crudOperations.all(),
 });
+
+export const idempotentDeleteOperations: CrudOperations = {
+	delete: { missing: "ignore" },
+};
+export const invalidReadMissingOperations: CrudOperations = {
+	// @ts-expect-error missing-row behavior is specific to delete operations.
+	read: { missing: "ignore" },
+};
 
 export type IdInference = Assert<
 	Equal<CrudId<typeof typedResource>, { tenantId: string; id: number }>

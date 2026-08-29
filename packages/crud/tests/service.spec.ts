@@ -232,6 +232,116 @@ describe("CrudService cursor pagination", () => {
 });
 
 describe("CrudService transaction and lifecycle semantics", () => {
+	it("keeps list and read scopes, queries, projections, and response mappings in one transaction", async () => {
+		const scopeFact = defineCrudFact<string>("read-scope");
+		const events: string[] = [];
+		const adapter = new FakeCrudAdapter(
+			[{ id: 1, name: "Visible", tenantId: "tenant-a", deletedAt: null }],
+			{},
+			events,
+		);
+		const findMany = adapter.findMany.bind(adapter);
+		const findOne = adapter.findOne.bind(adapter);
+		vi.spyOn(adapter, "findMany").mockImplementation((input, context) => {
+			events.push("adapter:findMany");
+			expect(context.session).toBeDefined();
+			return findMany(input, context);
+		});
+		vi.spyOn(adapter, "findOne").mockImplementation((input, context) => {
+			events.push("adapter:findOne");
+			expect(context.session).toBeDefined();
+			return findOne(input, context);
+		});
+		const binding = defineCrudBinding({
+			resource: userResource,
+			adapter: { useValue: adapter },
+			fields: ["id", "name", "tenantId", "deletedAt"],
+			mappings: {
+				create: (input) => input,
+				update: (input) => input,
+				persistence: (values) => values,
+				response: (record) => {
+					events.push("mapping:response");
+					return {
+						id: Number(record.id),
+						name: String(record.name),
+						tenantId: String(record.tenantId),
+						deletedAt: record.deletedAt as Date | null,
+					};
+				},
+			},
+		});
+		const service = new CrudService(
+			userResource,
+			binding,
+			adapter,
+			[],
+			[
+				{
+					resolve: (context) => {
+						events.push("scope");
+						expect(context.session).toBeDefined();
+						return { facts: [provideCrudFact(scopeFact, "visible")] };
+					},
+				},
+			],
+			new CrudRegistry(),
+			resolveCrudModuleOptions({}),
+			undefined,
+			[
+				{
+					project: (records, context) => {
+						events.push("projection");
+						expect(context.session).toBeDefined();
+						expect(context.facts.require(scopeFact)).toBe("visible");
+						return records.map(() => ({}));
+					},
+				},
+			],
+		);
+
+		await service.list({ page: "1" });
+		expect(events).toEqual([
+			"transaction:begin",
+			"scope",
+			"adapter:findMany",
+			"projection",
+			"mapping:response",
+			"transaction:commit",
+		]);
+
+		events.length = 0;
+		await service.read({ id: 1 });
+		expect(events).toEqual([
+			"transaction:begin",
+			"scope",
+			"adapter:findOne",
+			"projection",
+			"mapping:response",
+			"transaction:commit",
+		]);
+	});
+
+	it.each(["list", "read"] as const)("rolls back when a %s projection fails", async (operation) => {
+		const adapter = new FakeCrudAdapter([
+			{ id: 1, name: "Visible", tenantId: "tenant-a", deletedAt: null },
+		]);
+		const { service } = createUserService({
+			adapter,
+			projections: [
+				{
+					project: () => {
+						throw new Error("projection failed");
+					},
+				},
+			],
+		});
+
+		const result = operation === "list" ? service.list({ page: "1" }) : service.read({ id: 1 });
+		await expect(result).rejects.toMatchObject({ status: 500 });
+		expect(adapter.events).toEqual(["transaction:begin", "transaction:rollback"]);
+	});
+
 	it("passes hook-transformed input and typed scope facts to ordered validators", async () => {
 		const parentFact = defineCrudFact<{ readonly id: string }>("authorized-parent");
 		const events: string[] = [];
@@ -785,12 +895,22 @@ describe("CrudService nested resource context", () => {
 		expect(transaction).toHaveBeenNthCalledWith(
 			1,
 			expect.any(Function),
-			expect.objectContaining({ operation: "create", pathParams: { parentId: 2 } }),
+			expect.objectContaining({ operation: "list", pathParams: { parentId: 2 } }),
 		);
 		expect(transaction).toHaveBeenNthCalledWith(
 			2,
 			expect.any(Function),
+			expect.objectContaining({ operation: "create", pathParams: { parentId: 2 } }),
+		);
+		expect(transaction).toHaveBeenNthCalledWith(
+			3,
+			expect.any(Function),
 			expect.objectContaining({ operation: "update", pathParams: { parentId: 2 } }),
+		);
+		expect(transaction).toHaveBeenNthCalledWith(
+			4,
+			expect.any(Function),
+			expect.objectContaining({ operation: "read", pathParams: { parentId: 2 } }),
 		);
 		expect(afterCommit).toHaveBeenNthCalledWith(
 			1,
@@ -945,6 +1065,63 @@ describe("CrudService nested resource context", () => {
 });
 
 describe("CrudService soft deletion", () => {
+	it("supports explicitly idempotent deletes without running mutation hooks for absent rows", async () => {
+		const resource = defineCrudResource({
+			name: "idempotent-records",
+			path: "idempotent-records",
+			itemPath: ":id",
+			idFields: { id: "id" },
+			contracts: {
+				id: z.object({ id: z.coerce.number().int() }),
+				create: z.object({ name: z.string() }),
+				update: z.object({ name: z.string().optional() }),
+				response: z.object({ id: z.number(), name: z.string() }),
+			},
+			operations: { delete: { missing: "ignore" } },
+		});
+		const adapter = new FakeCrudAdapter([{ id: 1, name: "Existing" }]);
+		const binding = defineCrudBinding({
+			resource,
+			adapter: { useValue: adapter },
+			fields: ["id", "name"],
+			mappings: {
+				create: (input) => input,
+				update: (input) => input,
+				response: (record) => ({ id: Number(record.id), name: String(record.name) }),
+			},
+		});
+		const beforeDelete = vi.fn();
+		const afterDelete = vi.fn();
+		const afterCommit = vi.fn();
+		const service = new CrudService(
+			resource,
+			binding,
+			adapter,
+			[{ beforeDelete, afterDelete, afterCommit }],
+			[],
+			new CrudRegistry(),
+			resolveCrudModuleOptions({}),
+		);
+
+		await expect(service.delete({ id: 1 })).resolves.toBeUndefined();
+		await expect(service.delete({ id: 1 })).resolves.toBeUndefined();
+		await expect(service.delete({ id: 999 })).resolves.toBeUndefined();
+
+		expect(adapter.snapshot()).toEqual([]);
+		expect(adapter.calls).toMatchObject({ findOne: 3, delete: 1 });
+		expect(beforeDelete).toHaveBeenCalledTimes(1);
+		expect(afterDelete).toHaveBeenCalledTimes(1);
+		expect(afterCommit).toHaveBeenCalledTimes(1);
+		expect(adapter.events).toEqual([
+			"transaction:begin",
+			"transaction:commit",
+			"transaction:begin",
+			"transaction:commit",
+			"transaction:begin",
+			"transaction:commit",
+		]);
+	});
+
 	it("logically deletes, hides normal reads, supports deleted-only lists, and restores", async () => {
 		const adapter = new FakeCrudAdapter([
 			{ id: 1, tenantId: "tenant-a", name: "Soft", deletedAt: null },

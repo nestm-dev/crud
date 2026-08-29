@@ -18,8 +18,11 @@ export { defineCrudResource, isCrudResource } from "./resource/define-resource.t
 export { crudOperations, CRUD_OPERATION_NAMES } from "./resource/operations.ts";
 export type {
 	CrudEnhancers,
+	CrudDeleteMissingBehavior,
+	CrudDeleteOperationOptions,
 	CrudOperationName,
 	CrudOperationOptions,
+	CrudOperationOptionsFor,
 	CrudOperations,
 } from "./resource/operations.ts";
 export type {

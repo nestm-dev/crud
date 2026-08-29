@@ -71,6 +71,14 @@ interface RelationReadOptions {
 	readonly tuples: readonly (readonly unknown[])[];
 	readonly executionContext?: ExecutionContext;
 	readonly limit: number;
+	readonly maxItems: number;
+	readonly relationName: string;
+	readonly relationType: CrudRelationConfig["type"];
+}
+
+interface RelationReadResult<RecordType> {
+	readonly records: readonly RecordType[];
+	readonly responses: readonly unknown[];
 }
 
 interface ResolvedCrudScope extends Omit<CrudScopeResult, "facts"> {
@@ -188,74 +196,83 @@ export class CrudService<
 			defaultLimit: this.options.pagination.defaultLimit,
 			maxLimit: this.options.pagination.maxLimit,
 		});
-		const context = this.operationContext("list", executionContext, undefined, pathParams);
-		const scope = await this.resolveScopes(context);
-		const predicate = andCrudPredicates(
-			query.predicate,
-			this.searchPredicate(query.search),
-			this.deletedPredicate(query),
-			this.pathParamsPredicate(pathParams),
-			scope.predicate,
-		);
-		const result = await this.runAdapter(() =>
-			this.adapter.findMany(
-				{
-					...(predicate === undefined ? {} : { predicate }),
-					order: query.order,
-					...(query.mode === "offset" ? { offset: (query.page - 1) * query.limit } : {}),
-					limit: query.mode === "cursor" ? query.limit + 1 : query.limit,
-					count: query.mode === "offset",
+		return this.runAdapter(() =>
+			this.adapter.transaction(
+				async (session) => {
+					const baseContext = this.operationContext("list", executionContext, session, pathParams);
+					const scope = await this.resolveScopes(baseContext);
+					const context: CrudOperationContext<Resource> = {
+						...baseContext,
+						facts: scope.facts,
+					};
+					const predicate = andCrudPredicates(
+						query.predicate,
+						this.searchPredicate(query.search),
+						this.deletedPredicate(query),
+						this.pathParamsPredicate(pathParams),
+						scope.predicate,
+					);
+					const result = await this.adapter.findMany(
+						{
+							...(predicate === undefined ? {} : { predicate }),
+							order: query.order,
+							...(query.mode === "offset" ? { offset: (query.page - 1) * query.limit } : {}),
+							limit: query.mode === "cursor" ? query.limit + 1 : query.limit,
+							count: query.mode === "offset",
+						},
+						this.adapterContext(context),
+					);
+
+					const hasNextPage = query.mode === "cursor" && result.records.length > query.limit;
+					const records = hasNextPage ? result.records.slice(0, query.limit) : result.records;
+					const relationMaps = await this.loadRelations(records, query.includes, executionContext);
+					const projected = await this.projectRecords(records, context);
+					const data = await Promise.all(
+						records.map((record, index) =>
+							this.mapRecord(record, relationMaps[index] ?? {}, context, projected?.[index]),
+						),
+					);
+
+					if (query.mode === "offset") {
+						if (result.total === undefined) {
+							throw new InternalServerErrorException(
+								"Persistence adapter omitted the total for a counted CRUD query.",
+							);
+						}
+						const total = result.total;
+						if (!Number.isSafeInteger(total) || total < 0) {
+							throw new InternalServerErrorException(
+								"Persistence adapter returned an invalid total for a counted CRUD query.",
+							);
+						}
+						const totalPages = Math.ceil(total / query.limit);
+						return {
+							data,
+							meta: {
+								mode: "offset" as const,
+								page: query.page,
+								limit: query.limit,
+								total,
+								totalPages,
+								hasNextPage: query.page < totalPages,
+								hasPreviousPage: query.page > 1,
+							},
+						};
+					}
+
+					const last = records.at(-1);
+					const nextCursor =
+						hasNextPage && last !== undefined && this.cursorCodec !== undefined
+							? await this.encodeNextCursor(last, query.order, this.cursorCodec, pathFixedValues)
+							: null;
+					return {
+						data,
+						meta: { mode: "cursor" as const, limit: query.limit, nextCursor, hasNextPage },
+					};
 				},
-				this.adapterContext(context),
+				this.adapterContext(this.operationContext("list", executionContext, undefined, pathParams)),
 			),
 		);
-
-		const hasNextPage = query.mode === "cursor" && result.records.length > query.limit;
-		const records = hasNextPage ? result.records.slice(0, query.limit) : result.records;
-		const relationMaps = await this.loadRelations(records, query.includes, executionContext);
-		const projected = await this.projectRecords(records, context);
-		const data = await Promise.all(
-			records.map((record, index) =>
-				this.mapRecord(record, relationMaps[index] ?? {}, context, projected?.[index]),
-			),
-		);
-
-		if (query.mode === "offset") {
-			if (result.total === undefined) {
-				throw new InternalServerErrorException(
-					"Persistence adapter omitted the total for a counted CRUD query.",
-				);
-			}
-			const total = result.total;
-			if (!Number.isSafeInteger(total) || total < 0) {
-				throw new InternalServerErrorException(
-					"Persistence adapter returned an invalid total for a counted CRUD query.",
-				);
-			}
-			const totalPages = Math.ceil(total / query.limit);
-			return {
-				data,
-				meta: {
-					mode: "offset",
-					page: query.page,
-					limit: query.limit,
-					total,
-					totalPages,
-					hasNextPage: query.page < totalPages,
-					hasPreviousPage: query.page > 1,
-				},
-			};
-		}
-
-		const last = records.at(-1);
-		const nextCursor =
-			hasNextPage && last !== undefined && this.cursorCodec !== undefined
-				? await this.encodeNextCursor(last, query.order, this.cursorCodec, pathFixedValues)
-				: null;
-		return {
-			data,
-			meta: { mode: "cursor", limit: query.limit, nextCursor, hasNextPage },
-		};
 	}
 
 	async read(
@@ -264,10 +281,29 @@ export class CrudService<
 		includes: readonly string[] = [],
 	): Promise<CrudResponseInput<Resource>> {
 		const pathParams = this.pathParamsFromId(id);
-		const context = this.operationContext("read", executionContext, undefined, pathParams);
-		const record = await this.findVisible(id, context);
-		const relations = (await this.loadRelations([record], includes, executionContext))[0] ?? {};
-		return this.mapRecord(record, relations, context);
+		return this.runAdapter(() =>
+			this.adapter.transaction(
+				async (session) => {
+					const baseContext = this.operationContext("read", executionContext, session, pathParams);
+					const scope = await this.resolveScopes(baseContext);
+					const context: CrudOperationContext<Resource> = {
+						...baseContext,
+						facts: scope.facts,
+					};
+					const predicate = andCrudPredicates(
+						this.idPredicate(id),
+						this.normalRowsPredicate(),
+						scope.predicate,
+					)!;
+					const record = await this.adapter.findOne({ predicate }, this.adapterContext(context));
+					if (record === null) throw this.notFound();
+					const relations =
+						(await this.loadRelations([record], includes, executionContext))[0] ?? {};
+					return this.mapRecord(record, relations, context);
+				},
+				this.adapterContext(this.operationContext("read", executionContext, undefined, pathParams)),
+			),
+		);
 	}
 
 	async update(
@@ -422,6 +458,7 @@ export class CrudService<
 
 	async delete(id: CrudId<Resource>, executionContext?: ExecutionContext): Promise<void> {
 		const pathParams = this.pathParamsFromId(id);
+		const ignoreMissing = this.resource.operations.delete?.missing === "ignore";
 		let committed: MutationResult<Resource> | undefined;
 		await this.runAdapter(() =>
 			this.adapter.transaction(
@@ -439,7 +476,10 @@ export class CrudService<
 						scope.predicate,
 					)!;
 					const prior = await this.adapter.findOne({ predicate }, this.adapterContext(baseContext));
-					if (prior === null) throw this.notFound();
+					if (prior === null) {
+						if (ignoreMissing) return;
+						throw this.notFound();
+					}
 					const context: CrudOperationContext<Resource> = {
 						...baseContext,
 						facts: scope.facts,
@@ -465,7 +505,10 @@ export class CrudService<
 									},
 									this.adapterContext(context),
 								);
-					if (record === null) throw this.notFound();
+					if (record === null) {
+						if (ignoreMissing) return;
+						throw this.notFound();
+					}
 					for (const hook of this.hooks) await hook.afterDelete?.(record, context);
 					committed = { prior };
 				},
@@ -539,58 +582,62 @@ export class CrudService<
 		return result;
 	}
 
-	/** Internal relation batching entry point. Target scopes and soft-delete rules apply here. */
-	async findForRelation(options: RelationReadOptions): Promise<readonly RecordType[]> {
-		const context = this.operationContext("list", options.executionContext);
-		const scope = await this.resolveScopes(context);
-		const tuples = uniqueTuples(options.tuples);
-		const tuplePredicate = orCrudPredicates(
-			...tuples.map((tuple) =>
-				andCrudPredicates(
-					...options.fields.map((field, index) => ({
-						kind: "comparison" as const,
-						field,
-						operator: "eq" as const,
-						value: tuple[index],
-					})),
-				),
-			),
-		);
-		if (tuplePredicate === undefined) return [];
-		const predicate = andCrudPredicates(
-			tuplePredicate,
-			this.normalRowsPredicate(),
-			scope.predicate,
-		);
-		const result = await this.runAdapter(() =>
-			this.adapter.findMany(
-				{
-					...(predicate === undefined ? {} : { predicate }),
-					order: [],
-					limit: options.limit,
-					count: false,
+	/** Internal relation batching entry point. Target scopes and response mapping stay transactional. */
+	async readForRelation(options: RelationReadOptions): Promise<RelationReadResult<RecordType>> {
+		return this.runAdapter(() =>
+			this.adapter.transaction(
+				async (session) => {
+					const scopeContext = this.operationContext("list", options.executionContext, session);
+					const scope = await this.resolveScopes(scopeContext);
+					const tuples = uniqueTuples(options.tuples);
+					const tuplePredicate = orCrudPredicates(
+						...tuples.map((tuple) =>
+							andCrudPredicates(
+								...options.fields.map((field, index) => ({
+									kind: "comparison" as const,
+									field,
+									operator: "eq" as const,
+									value: tuple[index],
+								})),
+							),
+						),
+					);
+					if (tuplePredicate === undefined) return { records: [], responses: [] };
+					const predicate = andCrudPredicates(
+						tuplePredicate,
+						this.normalRowsPredicate(),
+						scope.predicate,
+					);
+					const result = await this.adapter.findMany(
+						{
+							...(predicate === undefined ? {} : { predicate }),
+							order: [],
+							limit: options.limit,
+							count: false,
+						},
+						this.adapterContext(scopeContext),
+					);
+					if (result.records.length >= options.limit) {
+						throw new UnprocessableEntityException(
+							`Relation "${options.relationName}" exceeds its configured per-record bound.`,
+						);
+					}
+					this.assertRelationGroupBounds(result.records, options);
+					const context: CrudOperationContext<Resource> = {
+						...this.operationContext("read", options.executionContext, session),
+						facts: scope.facts,
+					};
+					const projected = await this.projectRecords(result.records, context);
+					const responses = await Promise.all(
+						result.records.map((record, index) =>
+							this.mapRecord(record, {}, context, projected?.[index]),
+						),
+					);
+					return { records: result.records, responses };
 				},
-				this.adapterContext(context),
+				this.adapterContext(this.operationContext("list", options.executionContext)),
 			),
 		);
-		return result.records;
-	}
-
-	private async findVisible(
-		id: CrudId<Resource>,
-		context: CrudOperationContext<Resource>,
-	): Promise<RecordType> {
-		const scope = await this.resolveScopes(context);
-		const predicate = andCrudPredicates(
-			this.idPredicate(id),
-			this.normalRowsPredicate(),
-			scope.predicate,
-		)!;
-		const record = await this.runAdapter(() =>
-			this.adapter.findOne({ predicate }, this.adapterContext(context)),
-		);
-		if (record === null) throw this.notFound();
-		return record;
 	}
 
 	private idPredicate(id: CrudId<Resource>): CrudPredicate {
@@ -691,85 +738,49 @@ export class CrudService<
 		if (!Number.isSafeInteger(limit)) {
 			throw new InternalServerErrorException(`Relation "${name}" produced an unsafe fetch bound.`);
 		}
-		const targetRecords = await target.findForRelation({
+		const targetResult = await target.readForRelation({
 			fields: relation.foreign,
 			tuples: queryTuples,
 			...(executionContext === undefined ? {} : { executionContext }),
 			limit,
+			maxItems,
+			relationName: name,
+			relationType: relation.type,
 		});
-		if (targetRecords.length >= limit) {
-			throw new UnprocessableEntityException(
-				`Relation "${name}" exceeds its configured per-record bound.`,
-			);
-		}
-		const projectedTargets = await target.projectForRelation(
-			targetRecords as never,
-			executionContext,
-		);
 		const grouped = new Map<string, unknown[]>();
-		for (const record of targetRecords) {
+		for (const [targetIndex, record] of targetResult.records.entries()) {
 			const key = tupleKey(relation.foreign.map((field) => target.adapter.getField(record, field)));
 			const group = grouped.get(key) ?? [];
-			group.push(record);
+			group.push(targetResult.responses[targetIndex]);
 			grouped.set(key, group);
 		}
 		for (const [index, tuple] of tuples.entries()) {
 			const matches = grouped.get(tupleKey(tuple)) ?? [];
-			if (relation.type === "hasMany" && matches.length > maxItems) {
-				throw new UnprocessableEntityException(
-					`Relation "${name}" exceeds its maximum of ${maxItems} items.`,
-				);
-			}
-			if (relation.type !== "hasMany" && matches.length > 1) {
-				throw new UnprocessableEntityException(
-					`Relation "${name}" expected at most one target record.`,
-				);
-			}
-			const mapped = await Promise.all(
-				matches
-					.slice(0, relation.type === "hasMany" ? maxItems : 1)
-					.map((record) =>
-						target.mapRecordForRelation(
-							record,
-							executionContext,
-							projectedTargets.get(record as never),
-						),
-					),
-			);
-			maps[index]![name] = relation.type === "hasMany" ? mapped : (mapped[0] ?? null);
+			maps[index]![name] = relation.type === "hasMany" ? matches : (matches[0] ?? null);
 		}
 	}
 
-	async mapRecordForRelation(
-		record: RecordType,
-		executionContext?: ExecutionContext,
-		projected?: Readonly<Record<string, unknown>>,
-	): Promise<unknown> {
-		return this.mapRecord(record, {}, this.operationContext("read", executionContext), projected);
-	}
-
-	/**
-	 * Projects a relation's target records as one batch, keyed by record identity.
-	 *
-	 * Without this a nested payload would silently lack the projected fields that the same
-	 * resource carries at the top level — the response schema is shared, so that asymmetry shows
-	 * up as a validation failure on the include, far from its cause.
-	 */
-	async projectForRelation(
+	private assertRelationGroupBounds(
 		records: readonly RecordType[],
-		executionContext?: ExecutionContext,
-	): Promise<ReadonlyMap<RecordType, Readonly<Record<string, unknown>>>> {
-		const projected = await this.projectRecords(
-			records,
-			this.operationContext("read", executionContext),
-		);
-		const byRecord = new Map<RecordType, Readonly<Record<string, unknown>>>();
-		if (projected === undefined) return byRecord;
-		for (const [index, record] of records.entries()) {
-			const values = projected[index];
-			if (values !== undefined) byRecord.set(record, values);
+		options: RelationReadOptions,
+	): void {
+		const counts = new Map<string, number>();
+		for (const record of records) {
+			const key = tupleKey(options.fields.map((field) => this.adapter.getField(record, field)));
+			counts.set(key, (counts.get(key) ?? 0) + 1);
 		}
-		return byRecord;
+		for (const count of counts.values()) {
+			if (options.relationType === "hasMany" && count > options.maxItems) {
+				throw new UnprocessableEntityException(
+					`Relation "${options.relationName}" exceeds its maximum of ${options.maxItems} items.`,
+				);
+			}
+			if (options.relationType !== "hasMany" && count > 1) {
+				throw new UnprocessableEntityException(
+					`Relation "${options.relationName}" expected at most one target record.`,
+				);
+			}
+		}
 	}
 
 	private async mapRecord(
@@ -1090,12 +1101,12 @@ export class CrudService<
 		if (Object.keys(this.resource.idFields).length > 1 && !this.adapter.capabilities.compositeIds) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks composite ID support.`);
 		}
+		if (!this.adapter.capabilities.transactions) {
+			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks transactions.`);
+		}
 		const mutates = ["create", "update", "delete", "restore", "upsert"].some(
 			(operation) => this.resource.operations[operation as MutationName] !== undefined,
 		);
-		if (mutates && !this.adapter.capabilities.transactions) {
-			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks transactions.`);
-		}
 		if (mutates && !this.adapter.capabilities.returning) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks returning mutations.`);
 		}

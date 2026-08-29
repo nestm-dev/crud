@@ -18,20 +18,17 @@ interface ErasedRelationReadOptions {
 	readonly tuples: readonly (readonly unknown[])[];
 	readonly executionContext?: ExecutionContext;
 	readonly limit: number;
+	readonly maxItems: number;
+	readonly relationName: string;
+	readonly relationType: "hasMany" | "hasOne" | "belongsTo";
 }
 
 interface CrudRelationService {
 	readonly adapter: { getField(record: unknown, field: string): unknown };
-	findForRelation(options: ErasedRelationReadOptions): Promise<readonly unknown[]>;
-	projectForRelation(
-		records: readonly unknown[],
-		executionContext?: ExecutionContext,
-	): Promise<ReadonlyMap<unknown, Readonly<Record<string, unknown>>>>;
-	mapRecordForRelation(
-		record: unknown,
-		executionContext?: ExecutionContext,
-		projected?: Readonly<Record<string, unknown>>,
-	): Promise<unknown>;
+	readForRelation(options: ErasedRelationReadOptions): Promise<{
+		readonly records: readonly unknown[];
+		readonly responses: readonly unknown[];
+	}>;
 }
 
 interface CrudRegistryEntry {

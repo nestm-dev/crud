@@ -286,9 +286,12 @@ describe("projections on relation targets", () => {
 		// `loadRelation` already fetches every target for the page in a single query, so the
 		// projection must piggyback on that batch rather than reintroduce the N+1 through the back
 		// door. Two articles, three comments between them, one projection call.
-		const project = vi.fn((records: readonly unknown[]) =>
-			records.map((record) => ({ score: Number((record as { id: number }).id) * 100 })),
-		);
+		const project = vi.fn((records: readonly unknown[], context: { session?: unknown }) => {
+			expect(context.session).toBeDefined();
+			return records.map((record) => ({
+				score: Number((record as { id: number }).id) * 100,
+			}));
+		});
 		const scores: CrudProjection = { project };
 		const registry = new CrudRegistry();
 		const options = resolveCrudModuleOptions({});
@@ -360,6 +363,8 @@ describe("projections on relation targets", () => {
 		const page = await articleService.list({ page: "1", limit: "10", include: "comments" });
 
 		expect(project).toHaveBeenCalledTimes(1);
+		expect(commentAdapter.events).toEqual(["transaction:begin", "transaction:commit"]);
+		expect(articleAdapter.events).toEqual(["transaction:begin", "transaction:commit"]);
 		expect(page.data).toEqual([
 			{
 				id: 1,

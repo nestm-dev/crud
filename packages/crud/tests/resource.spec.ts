@@ -108,6 +108,16 @@ describe("defineCrudResource", () => {
 		expect(Object.isFrozen(resource.softDelete?.queryDeletedEnhancers?.decorators)).toBe(true);
 	});
 
+	it("snapshots explicit idempotent delete semantics", () => {
+		const resource = defineCrudResource({
+			...validDefinition(),
+			operations: { delete: { missing: "ignore" } },
+		});
+
+		expect(resource.operations.delete?.missing).toBe("ignore");
+		expect(Object.isFrozen(resource.operations.delete)).toBe(true);
+	});
+
 	it("snapshots and freezes mutation validator tokens", () => {
 		const validators = [Symbol("first-validator")];
 		const resource = defineCrudResource({ ...validDefinition(), validators });
@@ -359,6 +369,26 @@ describe("defineCrudResource", () => {
 					operations: { list: undefined } as unknown as CrudOperations,
 				}),
 			"options object",
+		],
+		[
+			"missing-row behavior on a non-delete operation",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					operations: { read: { missing: "ignore" } } as unknown as CrudOperations,
+				}),
+			"cannot configure missing-row behavior",
+		],
+		[
+			"invalid delete missing-row behavior",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					operations: {
+						delete: { missing: "explode" },
+					} as unknown as CrudOperations,
+				}),
+			'missing must be "not-found" or "ignore"',
 		],
 		[
 			"disabled pagination modes",
