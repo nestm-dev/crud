@@ -1,5 +1,19 @@
 # @nestm/crud-typeorm
 
+## 0.1.0-alpha.11
+
+### Minor Changes
+
+- b9b990d: Allow atomic PostgreSQL upserts to target a complete non-deferrable TypeORM
+  unique constraint or non-partial unique index in addition to the primary
+  identity. This supports entities with generated primary keys and domain-owned
+  alternate identities while preserving scoped conflict-update authorization,
+  explicit overwrite allowlists, and single-statement execution.
+
+### Patch Changes
+
+- @nestm/crud@0.1.0-alpha.11
+
 ## 0.1.0-alpha.10
 
 ### Patch Changes
