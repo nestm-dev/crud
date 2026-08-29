@@ -66,7 +66,6 @@ describe.each(platforms)("nested generated HTTP contract on %s", (_name, createA
 				create: (input) => input,
 				update: (input) => input,
 				upsert: (id, input) => ({ id: id.itemId, name: input.name }),
-				scopeCreate: (values) => ({ projectId: values.projectId }),
 				persistence: (values) => values,
 				response: (record) => ({
 					projectId: requiredNumber(record.projectId, "projectId"),

@@ -44,9 +44,8 @@ export type CrudScopeCreateField<
 export type CrudCreateMappingValues<
 	CreateValues extends object,
 	ScopeCreateField extends keyof CreateValues = never,
-> = CrudMappingValues<
-	Omit<CreateValues, ScopeCreateField> & Partial<Pick<CreateValues, ScopeCreateField>>
->;
+> = Omit<CrudMappingValues<CreateValues>, ScopeCreateField> &
+	Partial<Pick<CrudMappingValues<CreateValues>, ScopeCreateField>>;
 
 /**
  * Adapter values accepted from a mapping callback before CRUD removes
@@ -58,13 +57,11 @@ export type CrudCreateMappingValues<
  * Mappers may return either form; CRUD normalizes the former before invoking
  * the adapter without weakening required persistence properties.
  */
-export type CrudMappingValues<Values extends object> = Values extends object
-	? {
-			[Field in keyof Values]: object extends Pick<Values, Field>
-				? Values[Field] | undefined
-				: Values[Field];
-		}
-	: never;
+export type CrudMappingValues<Values extends object> = {
+	[Field in keyof Values]: object extends Pick<Values, Field>
+		? Values[Field] | undefined
+		: Values[Field];
+};
 
 export interface CrudBindingMappings<
 	Resource extends AnyCrudResource = AnyCrudResource,
@@ -79,11 +76,11 @@ export interface CrudBindingMappings<
 		| CrudCreateMappingValues<CreateValues, ScopeCreateField>
 		| Promise<CrudCreateMappingValues<CreateValues, ScopeCreateField>>;
 	/**
-	 * Maps logical values supplied by CRUD scopes to adapter insert fields.
+	 * Maps logical values supplied by CRUD scopes to differently named adapter fields.
 	 *
-	 * Define this mapping for new scoped bindings. For compatibility, bindings
-	 * that omit it fall back to `persistence`, but that fallback cannot express
-	 * immutable insert-only fields and will be removed in the next major release.
+	 * Omit this for ordinary same-name fields declared by `scopeCreateFields`; CRUD
+	 * copies and validates those values automatically. Dynamic custom mappings keep
+	 * `unknown` inputs because scopes are application code and may supply any value.
 	 */
 	scopeCreate?(
 		values: CrudValues,
@@ -145,7 +142,7 @@ export interface CrudResourceBinding<
 		NoInfer<UpdateValues>,
 		NoInfer<ScopeCreateField>
 	>;
-	/** Adapter insert fields supplied by scopes through `mappings.scopeCreate`. */
+	/** Adapter insert fields supplied by scopes, with automatic same-name mapping. */
 	readonly scopeCreateFields?: readonly string[];
 	/** Required adapter-level configuration when the resource enables atomic upsert. */
 	readonly upsert?: CrudBindingUpsertOptions;

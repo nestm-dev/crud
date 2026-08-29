@@ -12,11 +12,15 @@ pnpm add @nestm/crud@alpha @nestm/crud-typeorm@alpha typeorm pg
 ```
 
 ```ts
-import { bindTypeOrmCrud, createTypeOrmCrudAdapter } from "@nestm/crud-typeorm";
+import {
+	bindTypeOrmCrud,
+	createTypeOrmCrudAdapter,
+	TypeOrmCrudTransactionIsolationLevel,
+} from "@nestm/crud-typeorm";
 
 const usersAdapter = createTypeOrmCrudAdapter({
 	repository: usersRepository,
-	columns: { id: "id", email: "email", createdAt: "createdAt" },
+	columns: { id: true, email: true, createdAt: true },
 });
 
 const usersBinding = bindTypeOrmCrud({
@@ -31,13 +35,43 @@ const usersBinding = bindTypeOrmCrud({
 });
 ```
 
-`columns` maps CRUD logical fields to entity property paths. It must cover every
-field listed by the binding. Define `mappings.persistence` when scopes or soft
+`columns` maps CRUD logical fields to entity property paths. Same-name entity
+properties use autocomplete-friendly `true`; aliases use an explicit `property`:
+
+```ts
+columns: {
+	id: true,
+	organizationId: true,
+	role: { select: true },
+	displayName: { property: "profile.displayName", select: true },
+}
+```
+
+This modern object form also defines the hydrated selection. Set `select: false`
+to keep a column available to predicates without reading it. Legacy string maps
+remain full-entity mappings unless `select` or `exclude` is also configured. It
+must cover every field listed by the binding. Define `mappings.persistence` when scopes or soft
 delete generate logical values outside create/update input mappings; it may be
 omitted when those generated values are always empty. CRUD removes explicitly
 undefined optional mapper properties before invoking the adapter.
 Native `rowPredicate` parameters must not use the adapter-reserved `crud_<n>`
 names; a collision is rejected before the statement executes.
+
+Declared same-name scope fields are copied automatically; no mapper or cast is
+needed:
+
+```ts
+scopeCreateFields: ["organizationId", "workspaceId", "createdById"],
+mappings: {
+	create: (input) => ({ role: input.role }),
+	update: (input) => ({ role: input.role }),
+	response: (record) => record,
+}
+```
+
+Use `mappings.scopeCreate` only to translate differently named logical values.
+Those values intentionally remain `unknown` until the custom mapper validates
+them.
 
 ## Operation-wide transaction requirements
 
@@ -48,9 +82,11 @@ the minimum isolation needed by any of that work before the transaction starts:
 ```ts
 const documentsAdapter = createTypeOrmCrudAdapter({
 	repository: documentsRepository,
-	columns: { id: "id", organizationId: "organizationId", title: "title" },
-	transaction: { isolationLevel: "repeatable read" },
-	transactionRunner: tenantTransactionRunner,
+	columns: { id: true, organizationId: true, title: true },
+	transaction: {
+		isolationLevel: TypeOrmCrudTransactionIsolationLevel.RepeatableRead,
+		runner: tenantTransactionRunner,
+	},
 });
 ```
 
@@ -118,22 +154,28 @@ the reserved `crud_<n>` names used by neutral predicates.
 
 ## Selected records
 
-Use TypeORM's native `select` shape when an entity contains columns that a CRUD
+List the safe columns directly when an entity contains values that a CRUD
 resource must never hydrate:
 
 ```ts
 const connectionsAdapter = createTypeOrmCrudAdapter({
 	repository: connectionsRepository,
 	columns: {
-		id: "id",
-		ownerId: "ownerId",
-		disabledTools: "disabledTools",
-	},
-	select: {
 		id: true,
 		ownerId: true,
 		disabledTools: true,
 	},
+});
+```
+
+When nearly every scalar column is safe, wildcard selection plus a typed
+exclusion list avoids repeating the entity:
+
+```ts
+const connectionsAdapter = createTypeOrmCrudAdapter({
+	repository: connectionsRepository,
+	columns: { "*": true },
+	exclude: ["encryptedCredential", "refreshToken"],
 });
 ```
 
@@ -167,8 +209,9 @@ do not; query-builder subscribers can receive partial or absent entities.
 `@AfterInsert` runs on the input instance without generated values; its in-memory
 decorations are not copied to the separately hydrated returned record.
 Updates containing only `undefined`, empty embedded objects, or non-updatable
-columns are treated as no-ops. Omit `select` to preserve the legacy full-entity
-path.
+columns are treated as no-ops. TypeORM's native `select` option remains
+available for compatibility and complex nested selections; do not combine it
+with inline selection or `exclude`.
 
 ## Atomic upsert
 
@@ -186,7 +229,7 @@ const viewerBindings = bindTypeOrmCrud({
 		overwriteFields: ["toolPrefix", "allowedTools"],
 	},
 	mappings: {
-		// The final row also receives scope-owned fields through scopeCreate.
+		// The final row also receives declared same-name scope-owned fields automatically.
 		upsert: (id, input) => ({ ...id, ...input }),
 		// ...the other ordinary mappings
 	},

@@ -359,7 +359,9 @@ describe("TypeOrmCrudAdapter atomic upsert", () => {
 			repository: harness.repository,
 			columns: COLUMNS,
 			select: SELECT,
-			transactionRunner: { run: (_runnerContext, work) => work(harness.manager) },
+			transaction: {
+				runner: { run: (_runnerContext, work) => work(harness.manager) },
+			},
 			rowPredicate,
 		});
 
@@ -432,7 +434,9 @@ describe("TypeOrmCrudAdapter atomic upsert", () => {
 			repository: harness.repository,
 			columns: COLUMNS,
 			select: SELECT,
-			transactionRunner: { run: (_runnerContext, work) => work(harness.manager) },
+			transaction: {
+				runner: { run: (_runnerContext, work) => work(harness.manager) },
+			},
 			rowPredicate: ({ alias }) =>
 				new Brackets((where) => where.where(`${alias}.tenantId = :crud_0`, { crud_0: "native" })),
 		});

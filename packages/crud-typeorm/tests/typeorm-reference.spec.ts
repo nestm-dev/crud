@@ -146,13 +146,15 @@ function harness(options: TargetRepositoryOptions = {}) {
 	const adapter = createTypeOrmCrudAdapter({
 		repository: sourceRepository(),
 		columns: { id: "id" },
-		transactionRunner: {
-			async run<Result>(
-				_context: TypeOrmCrudTransactionRunnerContext,
-				work: (activeManager: EntityManager) => Promise<Result>,
-			): Promise<Result> {
-				state.runnerCalls += 1;
-				return work(manager);
+		transaction: {
+			runner: {
+				async run<Result>(
+					_context: TypeOrmCrudTransactionRunnerContext,
+					work: (activeManager: EntityManager) => Promise<Result>,
+				): Promise<Result> {
+					state.runnerCalls += 1;
+					return work(manager);
+				},
 			},
 		},
 	});

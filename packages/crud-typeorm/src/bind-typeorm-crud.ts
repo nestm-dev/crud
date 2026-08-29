@@ -49,7 +49,8 @@ interface BindTypeOrmCrudOptionsBase<
 		NoInfer<ScopeCreateFields[number]>
 	>;
 	/**
-	 * Insert fields supplied by CRUD scopes through `mappings.scopeCreate`.
+	 * Insert fields supplied by CRUD scopes. Same-name values are copied automatically;
+	 * `mappings.scopeCreate` is only needed for custom name translation.
 	 *
 	 * Declaring them makes those fields optional in `mappings.create` and asserted
 	 * present at insert time, which is what keeps an insert-only field such as an

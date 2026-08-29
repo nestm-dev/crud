@@ -314,6 +314,7 @@ function createSelectionHarness(options: SelectionHarnessOptions = {}): Selectio
 	}
 
 	const metadata = {
+		columns: [...columnByPath.values()],
 		findColumnWithPropertyPath: (path: string) => columnByPath.get(path),
 		findColumnWithPropertyPathStrict: (path: string) => columnByPath.get(path),
 		findEmbeddedWithPropertyPath: (path: string) =>
@@ -364,6 +365,86 @@ function selectedAdapter(harness: SelectionHarness) {
 }
 
 describe("TypeOrmCrudAdapter selected records", () => {
+	it("derives selection from autocomplete-friendly column definitions", async () => {
+		const harness = createSelectionHarness();
+		const adapter = createTypeOrmCrudAdapter({
+			repository: harness.repository,
+			columns: {
+				tenantId: true,
+				id: true,
+				name: true,
+				nickname: { property: "profile.nickname", select: true },
+				secret: { select: false },
+			},
+		});
+
+		await adapter.findOne({ predicate: IDENTITY }, context("read"));
+
+		expect(harness.builders[0]?.selections).toEqual([
+			`${TYPEORM_CRUD_ALIAS}.tenantId`,
+			`${TYPEORM_CRUD_ALIAS}.id`,
+			`${TYPEORM_CRUD_ALIAS}.name`,
+			`${TYPEORM_CRUD_ALIAS}.profile.nickname`,
+		]);
+		expect(() => adapter.getField(SELECTED_ROW, "secret")).toThrow(
+			"The TypeORM adapter did not select CRUD field 'secret'.",
+		);
+	});
+
+	it("maps wildcard columns and excludes sensitive properties from hydration", async () => {
+		const harness = createSelectionHarness();
+		const adapter = createTypeOrmCrudAdapter({
+			repository: harness.repository,
+			columns: { "*": true },
+			exclude: ["secret", "immutable"],
+		});
+
+		await adapter.findOne({ predicate: IDENTITY }, context("read"));
+
+		expect(harness.builders[0]?.selections).toEqual([
+			`${TYPEORM_CRUD_ALIAS}.tenantId`,
+			`${TYPEORM_CRUD_ALIAS}.id`,
+			`${TYPEORM_CRUD_ALIAS}.name`,
+			`${TYPEORM_CRUD_ALIAS}.profile.nickname`,
+		]);
+	});
+
+	it("rejects invalid inline selection and exclusion combinations", () => {
+		const { repository } = createSelectionHarness();
+
+		expect(() =>
+			createTypeOrmCrudAdapter({
+				repository,
+				columns: { tenantId: true, name: true },
+			}),
+		).toThrow("TypeORM CRUD select must include primary property 'id'.");
+		expect(() =>
+			createTypeOrmCrudAdapter({
+				repository,
+				columns: { "*": true },
+				exclude: ["id"],
+			}),
+		).toThrow("TypeORM CRUD select must include primary property 'id'.");
+		expect(() =>
+			Reflect.apply(createTypeOrmCrudAdapter, undefined, [
+				{
+					repository,
+					columns: { "*": true },
+					exclude: ["missing"],
+				},
+			]),
+		).toThrow("TypeORM CRUD exclude references unknown scalar property 'missing'.");
+		expect(() =>
+			Reflect.apply(createTypeOrmCrudAdapter, undefined, [
+				{
+					repository,
+					columns: { tenantId: true, id: true },
+					select: SELECT,
+				},
+			]),
+		).toThrow("TypeORM CRUD select cannot be combined with inline column selection or exclude.");
+	});
+
 	it("validates non-empty scalar selections and requires the complete primary identity", () => {
 		const { repository } = createSelectionHarness();
 		const invalidSelections = [
@@ -526,8 +607,8 @@ describe("TypeOrmCrudAdapter selected records", () => {
 			repository: harness.repository,
 			columns: COLUMNS,
 			select: SELECT,
-			transactionRunner: {
-				run: (_runnerContext, work) => work(harness.manager),
+			transaction: {
+				runner: { run: (_runnerContext, work) => work(harness.manager) },
 			},
 			rowPredicate,
 		});
@@ -637,7 +718,9 @@ describe("TypeOrmCrudAdapter selected records", () => {
 			repository: harness.repository,
 			columns: COLUMNS,
 			select: SELECT,
-			transactionRunner: { run: (_runnerContext, work) => work(harness.manager) },
+			transaction: {
+				runner: { run: (_runnerContext, work) => work(harness.manager) },
+			},
 			rowPredicate: () =>
 				new Brackets((query) =>
 					query.where(`${TYPEORM_CRUD_ALIAS}.tenantId = :crud_0`, { crud_0: "native" }),
