@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createTypeOrmCrudAdapter,
 	TYPEORM_CRUD_ALIAS,
+	TypeOrmCrudTransactionIsolationLevel,
 	type TypeOrmCrudEffectiveTransaction,
 	type TypeOrmCrudRowPredicateContext,
 	type TypeOrmCrudTransactionRunnerContext,
@@ -225,10 +226,20 @@ describe("TypeOrmCrudAdapter construction", () => {
 	it("rejects every column that does not resolve to an entity property", () => {
 		const repository = createFakeRepository(createCapture(), { knownProperties: ["id", "name"] });
 		expect(() =>
-			createTypeOrmCrudAdapter({ repository, columns: { id: "id", tenantId: "tenant_id" } }),
+			Reflect.apply(createTypeOrmCrudAdapter, undefined, [
+				{
+					repository,
+					columns: { id: "id", tenantId: "tenant_id" },
+				},
+			]),
 		).toThrow(TypeError);
 		expect(() =>
-			createTypeOrmCrudAdapter({ repository, columns: { id: "id", tenantId: "tenant_id" } }),
+			Reflect.apply(createTypeOrmCrudAdapter, undefined, [
+				{
+					repository,
+					columns: { id: "id", tenantId: "tenant_id" },
+				},
+			]),
 		).toThrow("CRUD field 'tenantId' maps to unknown TypeORM property 'tenant_id'.");
 	});
 
@@ -425,7 +436,9 @@ describe("TypeOrmCrudAdapter row predicate", () => {
 			columns: COLUMNS,
 			rowPredicate: {
 				resolve: () => new Brackets((qb) => qb.where("1 = 1")),
-				transaction: { isolationLevel: "repeatable read" },
+				transaction: {
+					isolationLevel: TypeOrmCrudTransactionIsolationLevel.RepeatableRead,
+				},
 			},
 		});
 
@@ -440,8 +453,10 @@ describe("TypeOrmCrudAdapter row predicate", () => {
 		const adapter = createTypeOrmCrudAdapter({
 			repository,
 			columns: COLUMNS,
-			transaction: { isolationLevel: "repeatable read" },
-			transactionRunner: runner,
+			transaction: {
+				isolationLevel: TypeOrmCrudTransactionIsolationLevel.RepeatableRead,
+				runner,
+			},
 		});
 
 		await adapter.transaction(
@@ -468,7 +483,9 @@ describe("TypeOrmCrudAdapter row predicate", () => {
 		const adapter = createTypeOrmCrudAdapter({
 			repository,
 			columns: COLUMNS,
-			transaction: { isolationLevel: "repeatable read" },
+			transaction: {
+				isolationLevel: TypeOrmCrudTransactionIsolationLevel.RepeatableRead,
+			},
 		});
 
 		await adapter.create({ values: { name: "Ada", tenantId: "tenant-a" } }, context("create"));
@@ -511,7 +528,7 @@ describe("TypeOrmCrudAdapter transaction runner", () => {
 		const adapter = createTypeOrmCrudAdapter({
 			repository,
 			columns: COLUMNS,
-			transactionRunner: runner,
+			transaction: { runner },
 		});
 
 		await adapter.create({ values: { name: "Ada", tenantId: "tenant-a" } }, context("create"));
@@ -521,7 +538,7 @@ describe("TypeOrmCrudAdapter transaction runner", () => {
 		expect(runner.contexts[0]).toMatchObject({
 			operation: "create",
 			accessMode: "read write",
-			isolationLevel: "read committed",
+			isolationLevel: TypeOrmCrudTransactionIsolationLevel.ReadCommitted,
 			mustOwnCommit: true,
 		});
 		// An uncounted list stays at read committed: there is no second statement for a
@@ -540,13 +557,13 @@ describe("TypeOrmCrudAdapter transaction runner", () => {
 		const repository = createFakeRepository(createCapture());
 		const runner = new TestRunner(managerOf(repository), {
 			accessMode: "read write",
-			isolationLevel: "read committed",
+			isolationLevel: TypeOrmCrudTransactionIsolationLevel.ReadCommitted,
 			ownsCommit: false,
 		});
 		const adapter = createTypeOrmCrudAdapter({
 			repository,
 			columns: COLUMNS,
-			transactionRunner: runner,
+			transaction: { runner },
 		});
 
 		await expect(
@@ -558,13 +575,13 @@ describe("TypeOrmCrudAdapter transaction runner", () => {
 		const repository = createFakeRepository(createCapture());
 		const runner = new TestRunner(managerOf(repository), {
 			accessMode: "read only",
-			isolationLevel: "read committed",
+			isolationLevel: TypeOrmCrudTransactionIsolationLevel.ReadCommitted,
 			ownsCommit: true,
 		});
 		const adapter = createTypeOrmCrudAdapter({
 			repository,
 			columns: COLUMNS,
-			transactionRunner: runner,
+			transaction: { runner },
 		});
 
 		await expect(
@@ -576,13 +593,13 @@ describe("TypeOrmCrudAdapter transaction runner", () => {
 		const repository = createFakeRepository(createCapture());
 		const runner = new TestRunner(managerOf(repository), {
 			accessMode: "read only",
-			isolationLevel: "read committed",
+			isolationLevel: TypeOrmCrudTransactionIsolationLevel.ReadCommitted,
 			ownsCommit: true,
 		});
 		const adapter = createTypeOrmCrudAdapter({
 			repository,
 			columns: COLUMNS,
-			transactionRunner: runner,
+			transaction: { runner },
 		});
 
 		await expect(
@@ -594,13 +611,13 @@ describe("TypeOrmCrudAdapter transaction runner", () => {
 		const repository = createFakeRepository(createCapture());
 		const runner = new TestRunner(managerOf(repository), {
 			accessMode: "snapshot",
-			isolationLevel: "read committed",
+			isolationLevel: TypeOrmCrudTransactionIsolationLevel.ReadCommitted,
 			ownsCommit: true,
 		} as never);
 		const adapter = createTypeOrmCrudAdapter({
 			repository,
 			columns: COLUMNS,
-			transactionRunner: runner,
+			transaction: { runner },
 		});
 
 		await expect(adapter.findOne({ predicate: IDENTITY }, context("read"))).rejects.toMatchObject({

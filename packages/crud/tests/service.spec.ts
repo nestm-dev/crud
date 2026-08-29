@@ -1044,10 +1044,6 @@ describe("CrudService nested resource context", () => {
 		const withParentScope = defineCrudBinding({
 			...bindingOptions,
 			scopeCreateFields: ["parentId"],
-			mappings: {
-				...bindingOptions.mappings,
-				scopeCreate: (values) => ({ parentId: values.parentId }),
-			},
 		});
 		expect(
 			() =>
@@ -1454,7 +1450,6 @@ function createViewerBinding(
 						}),
 					}),
 			update: (input) => input,
-			scopeCreate: (values) => ({ viewerUserId: values.viewerUserId }),
 			persistence: (values) => values,
 			response: (record) => ({
 				artifactId: requiredString(record.artifactId),
@@ -1528,7 +1523,6 @@ function createNestedChildService(
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
-			scopeCreate: (values) => ({ parentId: values.parentId }),
 			persistence: (values) => values,
 			response: (record) => nestedChildResponse(record),
 		},

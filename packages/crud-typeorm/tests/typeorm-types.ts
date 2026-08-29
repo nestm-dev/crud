@@ -9,6 +9,7 @@ import {
 	createTypeOrmCrudReferenceChecker,
 	type BindTypeOrmCrudOptions,
 	TypeOrmCrudAdapter,
+	TypeOrmCrudTransactionIsolationLevel,
 	type TypeOrmCrudAdapterOptions,
 	type TypeOrmCrudSelectedRecord,
 } from "../src/index.ts";
@@ -52,7 +53,7 @@ void referenceChecker.exists({}, { session });
 export const adapter = createTypeOrmCrudAdapter({
 	repository,
 	columns: { id: "id", name: "name", tenantId: "tenantId", secret: "secret" },
-	transaction: { isolationLevel: "repeatable read" },
+	transaction: { isolationLevel: TypeOrmCrudTransactionIsolationLevel.RepeatableRead },
 });
 
 export const selectedAdapter = createTypeOrmCrudAdapter({
@@ -64,6 +65,80 @@ export const selectedAdapter = createTypeOrmCrudAdapter({
 		profile: { nickname: true },
 		optionalLabel: true,
 	},
+});
+
+export const inlineSelectedAdapter = createTypeOrmCrudAdapter({
+	repository,
+	columns: {
+		id: true,
+		name: true,
+		tenantId: true,
+		secret: { select: false },
+		profileNickname: { property: "profile.nickname", select: true },
+	},
+});
+type InlineSelectedRecord = Exclude<
+	Awaited<ReturnType<typeof inlineSelectedAdapter.findOne>>,
+	null
+>;
+declare const inlineSelectedRecord: InlineSelectedRecord;
+const inlineName: string = inlineSelectedRecord.name;
+const inlineNickname: string | undefined = inlineSelectedRecord.profile?.nickname;
+// @ts-expect-error select:false fields are absent from the hydrated record type.
+void inlineSelectedRecord.secret;
+void inlineName;
+void inlineNickname;
+
+export const wildcardAdapter = createTypeOrmCrudAdapter({
+	repository,
+	columns: { "*": true },
+	exclude: ["secret"],
+});
+type WildcardRecord = Exclude<Awaited<ReturnType<typeof wildcardAdapter.findOne>>, null>;
+declare const wildcardRecord: WildcardRecord;
+const wildcardName: string = wildcardRecord.name;
+// @ts-expect-error Excluded wildcard properties are absent from the hydrated record type.
+void wildcardRecord.secret;
+void wildcardName;
+
+createTypeOrmCrudAdapter({
+	repository,
+	columns: {
+		id: true,
+		// @ts-expect-error Column property paths are checked against the entity.
+		name: { property: "display_name" },
+	},
+});
+
+createTypeOrmCrudAdapter({
+	repository,
+	columns: {
+		// @ts-expect-error Same-name shorthand rejects misspelled entity properties.
+		displayName: true,
+	},
+});
+
+createTypeOrmCrudAdapter({
+	repository,
+	columns: { "*": true },
+	// @ts-expect-error Exclusions autocomplete and reject unknown entity paths.
+	exclude: ["password"],
+});
+
+createTypeOrmCrudAdapter({
+	repository,
+	columns: { id: "id" },
+	transaction: {
+		// @ts-expect-error Isolation is intentionally an enum, not a free-form string.
+		isolationLevel: "repeatable read",
+	},
+});
+
+createTypeOrmCrudAdapter({
+	repository,
+	columns: { id: "id" },
+	// @ts-expect-error The runner belongs inside the transaction object.
+	transactionRunner: { run: (_context: unknown, work: never) => work },
 });
 
 const selection = {
@@ -208,9 +283,9 @@ const invalidOptions: BindTypeOrmCrudOptions<typeof resource, UserEntity, typeof
 };
 
 /**
- * Declaring scope-owned insert fields routes them through `mappings.scopeCreate`, so an
- * insert-only column never has to be expressible in `mappings.persistence` — the update
- * path shares that mapper, and a field expressible there is a field a client can change.
+ * Declaring same-name scope-owned insert fields maps them automatically, so an insert-only
+ * column never has to be expressible in `mappings.persistence` — the update path shares
+ * that mapper, and a field expressible there is a field a client can change.
  *
  * Unlike the Drizzle binder, this does NOT make create fields optional: TypeORM create
  * values are `DeepPartial<Entity>`, so every property is already optional and there is
@@ -225,7 +300,6 @@ const scopedBinding = bindTypeOrmCrud({
 	mappings: {
 		create: (input) => ({ name: input.name }),
 		update: (input) => (input.name === undefined ? {} : { name: input.name }),
-		scopeCreate: (values) => ({ tenantId: values.tenantId as string }),
 		persistence: () => ({}),
 		response: (record) => ({ id: record.id, name: record.name }),
 	},
@@ -244,7 +318,6 @@ const upsertBinding = bindTypeOrmCrud({
 		create: (input) => ({ name: input.name }),
 		update: (input) => (input.name === undefined ? {} : { name: input.name }),
 		upsert: (id, input) => ({ id: id.id, name: input.name }),
-		scopeCreate: (values) => ({ tenantId: values.tenantId as string }),
 		persistence: () => ({}),
 		response: (record) => ({ id: record.id, name: record.name }),
 	},

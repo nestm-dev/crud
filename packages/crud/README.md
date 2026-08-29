@@ -73,8 +73,11 @@ service providers, imports, and service exports while generating no controllers.
   fact identity fails closed with `500`; facts are never included in
   `afterCommit` events.
 - Binding `scopeCreateFields` declares adapter insert fields supplied by scopes
-  or nested paths through `mappings.scopeCreate`. Only declared fields may be omitted by
-  `mappings.create`; missing declared values fail closed before adapter create.
+  or nested paths. Same-name values are copied automatically, so ordinary bindings
+  do not need `mappings.scopeCreate`. Define that mapper only when logical and
+  persistence names differ; its dynamic inputs remain `unknown` and must be
+  narrowed honestly. Only declared fields may be omitted by `mappings.create`;
+  missing declared values fail closed before adapter create.
 - Mapping callbacks may return explicit `undefined` for optional Standard Schema
   properties; CRUD removes those properties before invoking an adapter.
   `mappings.persistence` is optional while generated scope/soft-delete values

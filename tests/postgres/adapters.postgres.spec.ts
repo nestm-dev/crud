@@ -16,6 +16,7 @@ import {
 import { createPrismaCrudAdapter } from "@nestm/crud-prisma";
 import {
 	createTypeOrmCrudAdapter,
+	TypeOrmCrudTransactionIsolationLevel,
 	type TypeOrmCrudTransactionRunnerContext,
 } from "@nestm/crud-typeorm";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -283,35 +284,37 @@ async function initializeHarnesses(pgUrl: string): Promise<void> {
 				category: "category",
 				createdAt: "createdAt",
 			},
-			transactionRunner: {
-				run: async (runnerContext, workWithTransaction) => {
-					runnerContexts.push(runnerContext);
-					// A query runner rather than `DataSource.transaction`: only the runner can
-					// issue `SET TRANSACTION READ ONLY`, and it has to be the first statement.
-					const queryRunner = typeOrmDataSource.createQueryRunner();
-					await queryRunner.connect();
-					await queryRunner.startTransaction(
-						runnerContext.isolationLevel === "repeatable read"
-							? "REPEATABLE READ"
-							: "READ COMMITTED",
-					);
-					try {
-						if (runnerContext.accessMode === "read only") {
-							await queryRunner.query("SET TRANSACTION READ ONLY");
+			transaction: {
+				runner: {
+					run: async (runnerContext, workWithTransaction) => {
+						runnerContexts.push(runnerContext);
+						// A query runner rather than `DataSource.transaction`: only the runner can
+						// issue `SET TRANSACTION READ ONLY`, and it has to be the first statement.
+						const queryRunner = typeOrmDataSource.createQueryRunner();
+						await queryRunner.connect();
+						await queryRunner.startTransaction(
+							runnerContext.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead
+								? "REPEATABLE READ"
+								: "READ COMMITTED",
+						);
+						try {
+							if (runnerContext.accessMode === "read only") {
+								await queryRunner.query("SET TRANSACTION READ ONLY");
+							}
+							const result = await workWithTransaction(queryRunner.manager, {
+								accessMode: runnerContext.accessMode,
+								isolationLevel: runnerContext.isolationLevel,
+								ownsCommit: true,
+							});
+							await queryRunner.commitTransaction();
+							return result;
+						} catch (error) {
+							if (queryRunner.isTransactionActive) await queryRunner.rollbackTransaction();
+							throw error;
+						} finally {
+							await queryRunner.release();
 						}
-						const result = await workWithTransaction(queryRunner.manager, {
-							accessMode: runnerContext.accessMode,
-							isolationLevel: runnerContext.isolationLevel,
-							ownsCommit: true,
-						});
-						await queryRunner.commitTransaction();
-						return result;
-					} catch (error) {
-						if (queryRunner.isTransactionActive) await queryRunner.rollbackTransaction();
-						throw error;
-					} finally {
-						await queryRunner.release();
-					}
+					},
 				},
 			},
 			rowPredicate: ({ alias, context: rowContext }) => {
@@ -337,43 +340,42 @@ async function initializeHarnesses(pgUrl: string): Promise<void> {
 				category: "category",
 				createdAt: "createdAt",
 			},
-			transaction: { isolationLevel: "repeatable read" },
-			transactionRunner: {
-				run: async (runnerContext, workWithTransaction) => {
-					const queryRunner = typeOrmDataSource.createQueryRunner();
-					await queryRunner.connect();
-					await queryRunner.startTransaction(
-						runnerContext.isolationLevel === "repeatable read"
-							? "REPEATABLE READ"
-							: "READ COMMITTED",
-					);
-					try {
-						const rows: unknown = await queryRunner.query("SHOW transaction_isolation");
-						const first = Array.isArray(rows) ? rows[0] : undefined;
-						if (
-							typeof first !== "object" ||
-							first === null ||
-							typeof (first as { transaction_isolation?: unknown }).transaction_isolation !==
-								"string"
-						) {
-							throw new Error("PostgreSQL did not report transaction_isolation.");
-						}
-						observedIsolation.push(
-							(first as { transaction_isolation: string }).transaction_isolation,
+			transaction: {
+				isolationLevel: TypeOrmCrudTransactionIsolationLevel.RepeatableRead,
+				runner: {
+					run: async (runnerContext, workWithTransaction) => {
+						const queryRunner = typeOrmDataSource.createQueryRunner();
+						await queryRunner.connect();
+						await queryRunner.startTransaction(
+							runnerContext.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead
+								? "REPEATABLE READ"
+								: "READ COMMITTED",
 						);
-						const result = await workWithTransaction(queryRunner.manager, {
-							accessMode: runnerContext.accessMode,
-							isolationLevel: runnerContext.isolationLevel,
-							ownsCommit: true,
-						});
-						await queryRunner.commitTransaction();
-						return result;
-					} catch (error) {
-						if (queryRunner.isTransactionActive) await queryRunner.rollbackTransaction();
-						throw error;
-					} finally {
-						await queryRunner.release();
-					}
+						try {
+							const rows: unknown = await queryRunner.query("SHOW transaction_isolation");
+							const first = Array.isArray(rows) ? rows[0] : undefined;
+							const isolation =
+								typeof first === "object" && first !== null
+									? Reflect.get(first, "transaction_isolation")
+									: undefined;
+							if (typeof isolation !== "string") {
+								throw new Error("PostgreSQL did not report transaction_isolation.");
+							}
+							observedIsolation.push(isolation);
+							const result = await workWithTransaction(queryRunner.manager, {
+								accessMode: runnerContext.accessMode,
+								isolationLevel: runnerContext.isolationLevel,
+								ownsCommit: true,
+							});
+							await queryRunner.commitTransaction();
+							return result;
+						} catch (error) {
+							if (queryRunner.isTransactionActive) await queryRunner.rollbackTransaction();
+							throw error;
+						} finally {
+							await queryRunner.release();
+						}
+					},
 				},
 			},
 		});

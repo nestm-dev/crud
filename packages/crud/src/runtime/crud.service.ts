@@ -16,6 +16,7 @@ import type {
 	CrudValues,
 } from "../adapter/adapter.types.ts";
 import type {
+	CrudCreateMappingValues,
 	CrudMappingValues,
 	CrudResourceBinding,
 	CrudScopeCreateField,
@@ -155,18 +156,15 @@ export class CrudService<
 					}
 					const mapped = await this.binding.mappings.create(value);
 					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
-					const scoped =
-						this.binding.mappings.scopeCreate === undefined
-							? await this.mapPersistenceValues(scopeCreateValues)
-							: await this.binding.mappings.scopeCreate(scopeCreateValues);
+					const scoped = await this.mapScopeCreateValues(scopeCreateValues);
 					this.assertScopeCreateFields(scoped);
 					// The runtime assertion above establishes the generic Pick that TypeScript cannot
 					// normalize back into an arbitrary adapter-defined CreateValues subtype. The
 					// final normalization removes explicitly undefined optional mapper properties.
-					const values = normalizeCrudMappingValues<CreateValues>({
+					const values = normalizeCrudCreateMappingValues<CreateValues, ScopeCreateField>({
 						...mapped,
 						...scoped,
-					} as CrudMappingValues<CreateValues>);
+					});
 					const record = await this.adapter.create({ values }, this.adapterContext(context));
 					for (const hook of this.hooks) {
 						await hook.afterCreate?.(record, context);
@@ -347,14 +345,14 @@ export class CrudService<
 						);
 					}
 					const mapped = await this.binding.mappings.update(value);
-					const scoped = await this.mapPersistenceValues(scope.updateValues ?? {});
+					const scoped = await this.mapPersistenceOverlay(scope.updateValues ?? {});
 					const record = await this.adapter.update(
 						{
 							predicate,
 							values: normalizeCrudMappingValues<UpdateValues>({
 								...mapped,
 								...scoped,
-							} as CrudMappingValues<UpdateValues>),
+							}),
 						},
 						this.adapterContext(context),
 					);
@@ -423,15 +421,12 @@ export class CrudService<
 					}
 					const mapped = await mapUpsert(id, value);
 					const scopeCreateValues = this.scopeCreateValues(scope, pathParams);
-					const scoped =
-						mappings.scopeCreate === undefined
-							? await this.mapPersistenceValues(scopeCreateValues)
-							: await mappings.scopeCreate(scopeCreateValues);
+					const scoped = await this.mapScopeCreateValues(scopeCreateValues);
 					this.assertScopeCreateFields(scoped);
-					const values = normalizeCrudMappingValues<CreateValues>({
+					const values = normalizeCrudCreateMappingValues<CreateValues, ScopeCreateField>({
 						...mapped,
 						...scoped,
-					} as CrudMappingValues<CreateValues>);
+					});
 					const record = await adapterUpsert(
 						{
 							conflictFields: config.conflictFields,
@@ -647,22 +642,21 @@ export class CrudService<
 				kind: "comparison" as const,
 				field,
 				operator: "eq" as const,
-				value: values[parameter],
+				value: Reflect.get(values, parameter),
 			})),
 		)!;
 	}
 
-	private identifierValues(id: CrudId<Resource>): Readonly<Record<string, unknown>> {
+	private identifierValues(id: CrudId<Resource>): object {
 		if (typeof id !== "object" || id === null) {
 			throw new BadRequestException("CRUD ID schemas must produce a parameter object.");
 		}
-		const values = id as Readonly<Record<string, unknown>>;
 		for (const parameter of Object.keys(this.resource.idFields)) {
-			if (!Object.hasOwn(values, parameter) || values[parameter] === undefined) {
+			if (!Object.hasOwn(id, parameter) || Reflect.get(id, parameter) === undefined) {
 				throw new BadRequestException(`CRUD ID schema did not produce parameter "${parameter}".`);
 			}
 		}
-		return values;
+		return id;
 	}
 
 	private searchPredicate(search: string | undefined): CrudPredicate | undefined {
@@ -756,7 +750,13 @@ export class CrudService<
 		}
 		for (const [index, tuple] of tuples.entries()) {
 			const matches = grouped.get(tupleKey(tuple)) ?? [];
-			maps[index]![name] = relation.type === "hasMany" ? matches : (matches[0] ?? null);
+			const relationMap = maps[index];
+			if (relationMap === undefined) {
+				throw new InternalServerErrorException(
+					`Relation "${name}" did not retain its source result slot.`,
+				);
+			}
+			relationMap[name] = relation.type === "hasMany" ? matches : (matches[0] ?? null);
 		}
 	}
 
@@ -898,7 +898,7 @@ export class CrudService<
 		return Object.fromEntries(
 			Object.keys(this.resource.pathParams.fields).map((parameter) => [
 				parameter,
-				values[parameter],
+				Reflect.get(values, parameter),
 			]),
 		) as CrudPathParams<Resource>;
 	}
@@ -910,14 +910,16 @@ export class CrudService<
 		if (typeof pathParams !== "object" || pathParams === null || Array.isArray(pathParams)) {
 			throw new BadRequestException("CRUD path parameter schemas must produce an object.");
 		}
-		const values = pathParams as Readonly<Record<string, unknown>>;
 		return Object.entries(this.resource.pathParams.fields).map(([parameter, field]) => {
-			if (!Object.hasOwn(values, parameter) || values[parameter] === undefined) {
+			if (
+				!Object.hasOwn(pathParams, parameter) ||
+				Reflect.get(pathParams, parameter) === undefined
+			) {
 				throw new BadRequestException(
 					`CRUD path parameter schema did not produce parameter "${parameter}".`,
 				);
 			}
-			return { field, value: values[parameter] };
+			return { field, value: Reflect.get(pathParams, parameter) };
 		});
 	}
 
@@ -952,16 +954,36 @@ export class CrudService<
 
 	private async mapPersistenceValues(values: CrudValues): Promise<UpdateValues> {
 		if (this.binding.mappings.persistence === undefined) {
-			if (Object.keys(values).length > 0) {
-				throw new TypeError(
-					`CRUD binding for "${this.resource.name}" must define mappings.persistence before scopes or soft delete can contribute update values.`,
-				);
-			}
-			return {} as UpdateValues;
+			throw new TypeError(
+				`CRUD binding for "${this.resource.name}" must define mappings.persistence before scopes or soft delete can contribute update values.`,
+			);
 		}
 		return normalizeCrudMappingValues<UpdateValues>(
 			await this.binding.mappings.persistence(values),
 		);
+	}
+
+	private async mapPersistenceOverlay(values: CrudValues): Promise<object> {
+		if (this.binding.mappings.persistence === undefined) {
+			if (Object.keys(values).length === 0) return {};
+			throw new TypeError(
+				`CRUD binding for "${this.resource.name}" must define mappings.persistence before scopes can contribute update values.`,
+			);
+		}
+		return normalizeCrudMappingValues<UpdateValues>(
+			await this.binding.mappings.persistence(values),
+		);
+	}
+
+	private async mapScopeCreateValues(values: CrudValues): Promise<object> {
+		if (this.binding.mappings.scopeCreate !== undefined) {
+			return this.binding.mappings.scopeCreate(values);
+		}
+		const fields = this.binding.scopeCreateFields;
+		if (fields === undefined || fields.length === 0) {
+			return this.mapPersistenceOverlay(values);
+		}
+		return Object.fromEntries(fields.map((field) => [field, values[field]]));
 	}
 
 	private operationContext(
@@ -1060,11 +1082,10 @@ export class CrudService<
 	}
 
 	private assertScopeCreateFields(
-		scoped: UpdateValues | CrudMappingValues<Partial<Pick<CreateValues, ScopeCreateField>>>,
-	): void {
-		const values = scoped as Readonly<Record<string, unknown>>;
+		scoped: object,
+	): asserts scoped is Pick<CreateValues, ScopeCreateField> {
 		for (const field of this.binding.scopeCreateFields ?? []) {
-			if (!Object.hasOwn(values, field) || values[field] === undefined) {
+			if (!Object.hasOwn(scoped, field) || Reflect.get(scoped, field) === undefined) {
 				throw new TypeError(
 					`CRUD scope for "${this.resource.name}" did not supply configured create field "${field}".`,
 				);
@@ -1104,8 +1125,15 @@ export class CrudService<
 		if (!this.adapter.capabilities.transactions) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks transactions.`);
 		}
-		const mutates = ["create", "update", "delete", "restore", "upsert"].some(
-			(operation) => this.resource.operations[operation as MutationName] !== undefined,
+		const mutationNames: readonly MutationName[] = [
+			"create",
+			"update",
+			"delete",
+			"restore",
+			"upsert",
+		];
+		const mutates = mutationNames.some(
+			(operation) => this.resource.operations[operation] !== undefined,
 		);
 		if (mutates && !this.adapter.capabilities.returning) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks returning mutations.`);
@@ -1119,11 +1147,10 @@ export class CrudService<
 			this.resource.pathParams !== undefined &&
 			(this.resource.operations.create !== undefined ||
 				this.resource.operations.upsert !== undefined) &&
-			(this.binding.mappings.scopeCreate === undefined ||
-				(this.binding.scopeCreateFields?.length ?? 0) === 0)
+			(this.binding.scopeCreateFields?.length ?? 0) === 0
 		) {
 			throw new TypeError(
-				`Nested CRUD insert binding for "${this.resource.name}" must declare scopeCreate and scopeCreateFields.`,
+				`Nested CRUD insert binding for "${this.resource.name}" must declare scopeCreateFields.`,
 			);
 		}
 		if (this.resource.operations.upsert !== undefined) {
@@ -1184,14 +1211,20 @@ export class CrudService<
 
 function normalizeCrudMappingValues<Values extends object>(
 	values: CrudMappingValues<Values>,
-): Values {
-	const normalized = { ...values } as Record<PropertyKey, unknown>;
+): Values;
+function normalizeCrudMappingValues(values: object): object {
+	const normalized: Record<PropertyKey, unknown> = { ...values };
 	for (const field of Reflect.ownKeys(normalized)) {
 		if (normalized[field] === undefined) delete normalized[field];
 	}
-	// CrudMappingValues only widens optional properties with `undefined`; deleting
-	// those properties restores the adapter's exact-optional Values contract.
-	return normalized as Values;
+	return normalized;
+}
+
+function normalizeCrudCreateMappingValues<Values extends object, ScopeField extends keyof Values>(
+	values: CrudCreateMappingValues<Values, ScopeField> & Pick<Values, ScopeField>,
+): Values;
+function normalizeCrudCreateMappingValues(values: object): object {
+	return normalizeCrudMappingValues(values);
 }
 
 function uniqueTuples(tuples: readonly (readonly unknown[])[]): readonly (readonly unknown[])[] {

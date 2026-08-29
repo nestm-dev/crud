@@ -92,13 +92,166 @@ export type TypeOrmCrudRecord<
 			? TypeOrmCrudSelectedRecord<Entity, Selection>
 			: never;
 
+type TypeOrmCrudScalarLike =
+	| string
+	| number
+	| bigint
+	| boolean
+	| symbol
+	| null
+	| undefined
+	| Date
+	| Uint8Array
+	| ((...arguments_: never[]) => unknown);
+
+type TypeOrmCrudNestedPropertyPath<Value> =
+	NonNullable<Value> extends TypeOrmCrudScalarLike
+		? never
+		: NonNullable<Value> extends readonly unknown[]
+			? never
+			: NonNullable<Value> extends object
+				? {
+						[Field in Extract<keyof NonNullable<Value>, string>]:
+							| Field
+							| (NonNullable<NonNullable<Value>[Field]> extends TypeOrmCrudScalarLike
+									? never
+									: NonNullable<NonNullable<Value>[Field]> extends object
+										? `${Field}.${Extract<keyof NonNullable<NonNullable<Value>[Field]>, string>}`
+										: never);
+					}[Extract<keyof NonNullable<Value>, string>]
+				: never;
+
+/** Autocomplete-friendly TypeORM entity property paths accepted by CRUD column mappings. */
+export type TypeOrmCrudPropertyPath<Entity extends object> = {
+	[Field in Extract<keyof Entity, string>]:
+		| Field
+		| (TypeOrmCrudNestedPropertyPath<Entity[Field]> extends infer Nested extends string
+				? `${Field}.${Nested}`
+				: never);
+}[Extract<keyof Entity, string>];
+
+export interface TypeOrmCrudColumnOptions<PropertyPath extends string = string> {
+	/** Entity property path. Defaults to the logical column key. */
+	readonly property?: PropertyPath;
+	/** Set false to keep the column queryable without hydrating it. Defaults to true. */
+	readonly select?: boolean;
+}
+
+export type TypeOrmCrudColumnDefinition<Entity extends object> =
+	| TypeOrmCrudPropertyPath<Entity>
+	| true
+	| TypeOrmCrudColumnOptions<TypeOrmCrudPropertyPath<Entity>>;
+
+/**
+ * Logical CRUD columns. `true` maps a same-name entity property; `"*"` maps every
+ * scalar property exposed by TypeORM metadata.
+ */
+export type TypeOrmCrudColumns<Entity extends object> =
+	| Readonly<Record<string, TypeOrmCrudPropertyPath<Entity>>>
+	| Readonly<
+			Partial<Record<TypeOrmCrudPropertyPath<Entity>, TypeOrmCrudColumnDefinition<Entity>>> & {
+				readonly "*"?: true | TypeOrmCrudColumnOptions<never>;
+			}
+	  >;
+
+type TypeOrmCrudAliasedColumnOptions<Entity extends object> = TypeOrmCrudColumnOptions<
+	TypeOrmCrudPropertyPath<Entity>
+> & {
+	readonly property: TypeOrmCrudPropertyPath<Entity>;
+};
+
+type TypeOrmCrudValidatedColumns<
+	Entity extends object,
+	Columns extends Readonly<Record<string, unknown>>,
+> = {
+	readonly [LogicalField in keyof Columns]: LogicalField extends "*"
+		? Columns[LogicalField] extends true | TypeOrmCrudColumnOptions<never>
+			? Columns[LogicalField]
+			: never
+		: LogicalField extends TypeOrmCrudPropertyPath<Entity>
+			? Columns[LogicalField] extends TypeOrmCrudColumnDefinition<Entity>
+				? Columns[LogicalField]
+				: never
+			: Columns[LogicalField] extends TypeOrmCrudAliasedColumnOptions<Entity>
+				? Columns[LogicalField]
+				: never;
+};
+
+type TypeOrmCrudColumnPropertyPath<
+	LogicalField extends PropertyKey,
+	Definition,
+> = Definition extends string
+	? Definition
+	: Definition extends { readonly property: infer Property extends string }
+		? Property
+		: Extract<LogicalField, string>;
+
+type TypeOrmCrudSelectedColumnPaths<Columns extends Readonly<Record<string, unknown>>> = {
+	[LogicalField in keyof Columns]: LogicalField extends "*"
+		? never
+		: Columns[LogicalField] extends { readonly select: false }
+			? never
+			: TypeOrmCrudColumnPropertyPath<LogicalField, Columns[LogicalField]>;
+}[keyof Columns];
+
+type TypeOrmCrudSelectionAtPath<Path extends string> = Path extends `${infer Field}.${infer Nested}`
+	? { readonly [Key in Field]: TypeOrmCrudSelectionAtPath<Nested> }
+	: { readonly [Key in Path]: true };
+
+type TypeOrmCrudUnionToIntersection<Union> = (
+	Union extends unknown ? (value: Union) => void : never
+) extends (value: infer Intersection) => void
+	? Intersection
+	: never;
+
+type TypeOrmCrudColumnSelection<Columns extends Readonly<Record<string, unknown>>> =
+	TypeOrmCrudUnionToIntersection<
+		TypeOrmCrudSelectedColumnPaths<Columns> extends infer Path extends string
+			? TypeOrmCrudSelectionAtPath<Path>
+			: never
+	>;
+
+type TypeOrmCrudConfiguredExcludedKeys<
+	Entity extends object,
+	Columns extends Readonly<Record<string, unknown>>,
+	Excluded extends readonly string[],
+> =
+	| Extract<Excluded[number], keyof Entity>
+	| Extract<
+			{
+				[LogicalField in keyof Columns]: Columns[LogicalField] extends {
+					readonly select: false;
+				}
+					? TypeOrmCrudColumnPropertyPath<LogicalField, Columns[LogicalField]>
+					: never;
+			}[keyof Columns],
+			keyof Entity
+	  >;
+
+/** Entity shape inferred from inline column selection or wildcard exclusion. */
+export type TypeOrmCrudConfiguredRecord<
+	Entity extends ObjectLiteral,
+	Columns extends Readonly<Record<string, unknown>>,
+	Excluded extends readonly TypeOrmCrudPropertyPath<Entity>[] = readonly [],
+> = "*" extends keyof Columns
+	? Omit<Entity, TypeOrmCrudConfiguredExcludedKeys<Entity, Columns, Excluded>>
+	: Exclude<Columns[keyof Columns], string> extends never
+		? Excluded extends readonly []
+			? Entity
+			: Omit<Entity, Extract<Excluded[number], keyof Entity>>
+		: TypeOrmCrudSelectedRecord<Entity, TypeOrmCrudColumnSelection<Columns> & object>;
+
 /** The alias every generated statement selects the resource's rows under. */
 export const TYPEORM_CRUD_ALIAS = "crud_record";
 /** The alias transaction-scoped reference lookups select their target rows under. */
 export const TYPEORM_CRUD_REFERENCE_ALIAS = "crud_reference";
+const TYPEORM_CRUD_ADAPTER_FACTORY = Symbol("@nestm/crud-typeorm:adapter-factory");
 
 export type TypeOrmCrudTransactionAccessMode = "read only" | "read write";
-export type TypeOrmCrudTransactionIsolationLevel = "read committed" | "repeatable read";
+export enum TypeOrmCrudTransactionIsolationLevel {
+	ReadCommitted = "read committed",
+	RepeatableRead = "repeatable read",
+}
 
 export interface TypeOrmCrudTransactionRequirements {
 	readonly accessMode: TypeOrmCrudTransactionAccessMode;
@@ -156,10 +309,12 @@ export interface TypeOrmCrudRowPredicateOptions<RecordType extends ObjectLiteral
 }
 
 /** Minimum transaction settings for the complete CRUD operation lifecycle. */
-export type TypeOrmCrudOperationTransactionOptions = Pick<
-	TypeOrmCrudTransactionRequirements,
-	"isolationLevel"
->;
+export interface TypeOrmCrudOperationTransactionOptions {
+	/** Minimum isolation for the complete operation lifecycle. */
+	readonly isolationLevel?: TypeOrmCrudTransactionIsolationLevel;
+	/** Application-owned transaction boundary, for example a tenant RLS executor. */
+	readonly runner?: TypeOrmCrudTransactionRunner;
+}
 
 /** Minimum context needed to reuse an active CRUD mutation transaction. */
 export interface TypeOrmCrudReferenceContext {
@@ -215,14 +370,16 @@ export interface TypeOrmCrudReferenceCheckerOptions<EntityType extends ObjectLit
 	/** Target metadata only; lookups acquire its repository from the active source manager. */
 	readonly target: EntityTarget<EntityType>;
 	/** Maps reference-predicate logical fields to target entity scalar property paths. */
-	readonly columns: Readonly<Record<string, string>>;
+	readonly columns: Readonly<Record<string, TypeOrmCrudPropertyPath<EntityType>>>;
 }
 
 export interface TypeOrmCrudAdapterOptions<RecordType extends ObjectLiteral> {
 	/** A repository owned and lifecycle-managed by the consuming application. */
 	readonly repository: Repository<RecordType>;
 	/** Maps public logical field names to TypeORM entity property paths. */
-	readonly columns: Readonly<Record<string, string>>;
+	readonly columns: TypeOrmCrudColumns<RecordType>;
+	/** Scalar entity property paths omitted from hydration but retained for predicates. */
+	readonly exclude?: readonly TypeOrmCrudPropertyPath<RecordType>[];
 	/**
 	 * TypeORM-native scalar column selection used for every hydrated record.
 	 *
@@ -239,15 +396,9 @@ export interface TypeOrmCrudAdapterOptions<RecordType extends ObjectLiteral> {
 	 * require a stable snapshot before the adapter issues its first statement.
 	 */
 	readonly transaction?: TypeOrmCrudOperationTransactionOptions;
-	/** Wraps standalone work in an application-owned transaction, for example a tenant RLS executor. */
-	readonly transactionRunner?: TypeOrmCrudTransactionRunner;
 	/** Adds a native, fail-closed SQL predicate to every read, update, and delete statement. */
 	readonly rowPredicate?:
 		TypeOrmCrudRowPredicate<RecordType> | TypeOrmCrudRowPredicateOptions<RecordType>;
-}
-
-interface PostgreSqlError {
-	readonly code?: unknown;
 }
 
 interface TypeOrmSessionState {
@@ -265,21 +416,20 @@ interface TypeOrmSessionState {
  */
 const activeTypeOrmSessions = new WeakMap<CrudAdapterSession, TypeOrmSessionState>();
 
-function sqlState(error: PostgreSqlError): string | undefined {
-	return typeof error.code === "string" && /^[0-9A-Z]{5}$/.test(error.code)
-		? error.code
-		: undefined;
+function sqlState(error: object): string | undefined {
+	const code = Reflect.get(error, "code");
+	return typeof code === "string" && /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
 }
 
 function postgresCode(error: unknown): string | undefined {
 	if (error instanceof QueryFailedError) {
 		const driverError: unknown = error.driverError;
 		if (typeof driverError === "object" && driverError !== null) {
-			return sqlState(driverError as PostgreSqlError);
+			return sqlState(driverError);
 		}
 	}
 	if (typeof error === "object" && error !== null) {
-		return sqlState(error as PostgreSqlError);
+		return sqlState(error);
 	}
 	return undefined;
 }
@@ -316,15 +466,12 @@ function getProperty(record: object, path: string): unknown {
 	let value: unknown = record;
 	for (const part of path.split(".")) {
 		if (typeof value !== "object" || value === null) return undefined;
-		value = (value as Readonly<Record<string, unknown>>)[part];
+		value = Reflect.get(value, part);
 	}
 	return value;
 }
 
-function flattenTypeOrmSelection(
-	selection: Readonly<Record<string, unknown>>,
-	prefix = "",
-): string[] {
+function flattenTypeOrmSelection(selection: object, prefix = ""): string[] {
 	const fields: string[] = [];
 	for (const [field, value] of Object.entries(selection)) {
 		const propertyPath = prefix === "" ? field : `${prefix}.${field}`;
@@ -334,10 +481,7 @@ function flattenTypeOrmSelection(
 		}
 		if (value === false || value === undefined) continue;
 		if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-			const nested = flattenTypeOrmSelection(
-				value as Readonly<Record<string, unknown>>,
-				propertyPath,
-			);
+			const nested = flattenTypeOrmSelection(value, propertyPath);
 			if (nested.length === 0) {
 				throw new TypeError(
 					`TypeORM CRUD select field '${propertyPath}' must include at least one scalar column.`,
@@ -353,24 +497,24 @@ function flattenTypeOrmSelection(
 
 function setProperty(record: Record<string, unknown>, path: string, value: unknown): void {
 	const parts = path.split(".");
-	let target = record;
+	let target: object = record;
 	for (const part of parts.slice(0, -1)) {
-		const existing = target[part];
+		const existing = Reflect.get(target, part);
 		if (existing !== null && typeof existing === "object" && !Array.isArray(existing)) {
-			target = existing as Record<string, unknown>;
+			target = existing;
 		} else {
 			const nested: Record<string, unknown> = {};
-			target[part] = nested;
+			Reflect.set(target, part, nested);
 			target = nested;
 		}
 	}
 	const leaf = parts.at(-1);
-	if (leaf !== undefined) target[leaf] = value;
+	if (leaf !== undefined) Reflect.set(target, leaf, value);
 }
 
 function normalizeSelectedUpdateValues(
 	metadata: EntityMetadata,
-	values: Readonly<Record<string, unknown>>,
+	values: object,
 	prefix = "",
 ): Record<string, unknown> {
 	const normalized: Record<string, unknown> = {};
@@ -397,11 +541,7 @@ function normalizeSelectedUpdateValues(
 			continue;
 		}
 		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-			const nested = normalizeSelectedUpdateValues(
-				metadata,
-				value as Readonly<Record<string, unknown>>,
-				propertyPath,
-			);
+			const nested = normalizeSelectedUpdateValues(metadata, value, propertyPath);
 			if (Object.keys(nested).length > 0) {
 				normalized[field] = nested;
 			} else if (embedded === undefined) {
@@ -455,7 +595,13 @@ function sameColumnSet(
 function strongestIsolationLevel(
 	...levels: readonly (TypeOrmCrudTransactionIsolationLevel | undefined)[]
 ): TypeOrmCrudTransactionIsolationLevel {
-	return levels.includes("repeatable read") ? "repeatable read" : "read committed";
+	return levels.includes(TypeOrmCrudTransactionIsolationLevel.RepeatableRead)
+		? TypeOrmCrudTransactionIsolationLevel.RepeatableRead
+		: TypeOrmCrudTransactionIsolationLevel.ReadCommitted;
+}
+
+function typeOrmOrderDirection(direction: "asc" | "desc"): "ASC" | "DESC" {
+	return direction === "asc" ? "ASC" : "DESC";
 }
 
 function transactionRequirements(
@@ -464,7 +610,10 @@ function transactionRequirements(
 	rowPredicateIsolationLevel?: TypeOrmCrudTransactionIsolationLevel,
 ): TypeOrmCrudTransactionRequirements {
 	const readOnly = context.operation === "list" || context.operation === "read";
-	const defaultIsolationLevel = context.operation === "list" ? "repeatable read" : "read committed";
+	const defaultIsolationLevel =
+		context.operation === "list"
+			? TypeOrmCrudTransactionIsolationLevel.RepeatableRead
+			: TypeOrmCrudTransactionIsolationLevel.ReadCommitted;
 	return {
 		accessMode: readOnly ? "read only" : "read write",
 		isolationLevel: strongestIsolationLevel(
@@ -487,8 +636,8 @@ function resolveEffectiveTransaction(
 	};
 	if (
 		(effective.accessMode !== "read only" && effective.accessMode !== "read write") ||
-		(effective.isolationLevel !== "read committed" &&
-			effective.isolationLevel !== "repeatable read") ||
+		(effective.isolationLevel !== TypeOrmCrudTransactionIsolationLevel.ReadCommitted &&
+			effective.isolationLevel !== TypeOrmCrudTransactionIsolationLevel.RepeatableRead) ||
 		typeof effective.ownsCommit !== "boolean"
 	) {
 		throw new CrudAdapterError(
@@ -503,8 +652,8 @@ function resolveEffectiveTransaction(
 		);
 	}
 	if (
-		requirements.isolationLevel === "repeatable read" &&
-		effective.isolationLevel !== "repeatable read"
+		requirements.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead &&
+		effective.isolationLevel !== TypeOrmCrudTransactionIsolationLevel.RepeatableRead
 	) {
 		throw new CrudAdapterError(
 			"unsupported",
@@ -669,18 +818,19 @@ export class TypeOrmCrudAdapter<
 	readonly #rowPredicate: TypeOrmCrudRowPredicate<EntityType> | undefined;
 	readonly #rowPredicateIsolationLevel: TypeOrmCrudTransactionIsolationLevel | undefined;
 	readonly #sessionMarker = Symbol("@nestm/crud-typeorm:session");
-	readonly #activeSessions = new WeakSet<object>();
+	readonly #activeSessions = new WeakMap<CrudAdapterSession, TypeOrmSessionState>();
 
-	constructor(
-		options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select"> & {
-			readonly select?: undefined;
-		},
-	);
-	constructor(options: unknown) {
-		const adapterOptions = options as TypeOrmCrudAdapterOptions<EntityType>;
+	protected constructor(
+		options: TypeOrmCrudAdapterOptions<EntityType>,
+		factoryToken: typeof TYPEORM_CRUD_ADAPTER_FACTORY,
+	) {
+		if (factoryToken !== TYPEORM_CRUD_ADAPTER_FACTORY) {
+			throw new TypeError("Construct TypeORM CRUD adapters with createTypeOrmCrudAdapter().");
+		}
+		const adapterOptions = options;
 		this.#repository = adapterOptions.repository;
-		this.#columns = Object.freeze({ ...adapterOptions.columns });
-		this.#selectedPropertyPaths = this.#resolveSelection(adapterOptions.select);
+		this.#columns = this.#resolveColumns(adapterOptions.columns);
+		this.#selectedPropertyPaths = this.#resolveConfiguredSelection(adapterOptions);
 		if (
 			this.#selectedPropertyPaths !== undefined &&
 			this.#repository.metadata.treeType !== undefined
@@ -697,7 +847,7 @@ export class TypeOrmCrudAdapter<
 			);
 		}
 		this.#operationIsolationLevel = adapterOptions.transaction?.isolationLevel;
-		this.#transactionRunner = adapterOptions.transactionRunner;
+		this.#transactionRunner = adapterOptions.transaction?.runner;
 		this.#rowPredicate =
 			typeof adapterOptions.rowPredicate === "function"
 				? adapterOptions.rowPredicate
@@ -754,7 +904,7 @@ export class TypeOrmCrudAdapter<
 							.createQueryBuilder()
 							.insert()
 							.into(repository.target)
-							.values(entity as QueryDeepPartialEntity<EntityType>)
+							.values(entity)
 							.updateEntity(false)
 							.returning([...this.#selectedPropertyPaths])
 							.execute();
@@ -857,7 +1007,7 @@ export class TypeOrmCrudAdapter<
 				{
 					accessMode: "read only",
 					isolationLevel: strongestIsolationLevel(
-						input.count ? "repeatable read" : undefined,
+						input.count ? TypeOrmCrudTransactionIsolationLevel.RepeatableRead : undefined,
 						this.#operationIsolationLevel,
 						this.#rowPredicateIsolationLevel,
 					),
@@ -870,7 +1020,7 @@ export class TypeOrmCrudAdapter<
 					for (const order of input.order) {
 						query.addOrderBy(
 							this.#fieldExpression(query, order.field),
-							order.direction.toUpperCase() as "ASC" | "DESC",
+							typeOrmOrderDirection(order.direction),
 						);
 					}
 					query.skip(input.offset ?? 0).take(input.limit);
@@ -911,10 +1061,7 @@ export class TypeOrmCrudAdapter<
 					);
 					if (record === null) return null;
 					if (this.#selectedPropertyPaths !== undefined) {
-						const values = normalizeSelectedUpdateValues(
-							repository.metadata,
-							input.values as Readonly<Record<string, unknown>>,
-						);
+						const values = normalizeSelectedUpdateValues(repository.metadata, input.values);
 						if (Object.keys(values).length === 0) return record;
 						const mutation = await this.#selectedMutation(
 							repository,
@@ -924,6 +1071,8 @@ export class TypeOrmCrudAdapter<
 						);
 						const result = await mutation
 							.update()
+							// Metadata validation above turns the dynamic property-path object into
+							// exactly the query-builder shape TypeORM expects at this boundary.
 							.set(values as QueryDeepPartialEntity<EntityType>)
 							.updateEntity(false)
 							.returning([...this.#selectedPropertyPaths])
@@ -1032,8 +1181,8 @@ export class TypeOrmCrudAdapter<
 				);
 			}
 			if (
-				requirements.isolationLevel === "repeatable read" &&
-				state.transaction.isolationLevel !== "repeatable read"
+				requirements.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead &&
+				state.transaction.isolationLevel !== TypeOrmCrudTransactionIsolationLevel.RepeatableRead
 			) {
 				throw new CrudAdapterError(
 					"unsupported",
@@ -1094,13 +1243,13 @@ export class TypeOrmCrudAdapter<
 				adapter: this.#sessionMarker,
 				value: state,
 			});
-			this.#activeSessions.add(state);
+			this.#activeSessions.set(session, state);
 			activeTypeOrmSessions.set(session, state);
 			try {
 				return await work(session);
 			} finally {
 				activeTypeOrmSessions.delete(session);
-				this.#activeSessions.delete(state);
+				this.#activeSessions.delete(session);
 			}
 		};
 
@@ -1131,7 +1280,9 @@ export class TypeOrmCrudAdapter<
 		const queryRunner = this.#repository.manager.connection.createQueryRunner();
 		await queryRunner.connect();
 		await queryRunner.startTransaction(
-			requirements.isolationLevel === "repeatable read" ? "REPEATABLE READ" : "READ COMMITTED",
+			requirements.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead
+				? "REPEATABLE READ"
+				: "READ COMMITTED",
 		);
 		try {
 			if (requirements.accessMode === "read only") {
@@ -1153,18 +1304,14 @@ export class TypeOrmCrudAdapter<
 	}
 
 	#stateFrom(session: CrudAdapterSession): TypeOrmSessionState {
-		if (
-			session.adapter !== this.#sessionMarker ||
-			typeof session.value !== "object" ||
-			session.value === null ||
-			!this.#activeSessions.has(session.value)
-		) {
+		const state = this.#activeSessions.get(session);
+		if (session.adapter !== this.#sessionMarker || state === undefined) {
 			throw new CrudAdapterError(
 				"unknown",
 				"A transaction session is foreign or no longer active.",
 			);
 		}
-		return session.value as TypeOrmSessionState;
+		return state;
 	}
 
 	#query(repository: Repository<EntityType>): SelectQueryBuilder<EntityType> {
@@ -1177,11 +1324,109 @@ export class TypeOrmCrudAdapter<
 		return query;
 	}
 
+	#resolveColumns(columns: TypeOrmCrudColumns<EntityType>): Readonly<Record<string, string>> {
+		const resolved: Record<string, string> = {};
+		if (Object.hasOwn(columns, "*")) {
+			const wildcard = columns["*"];
+			if (
+				wildcard !== true &&
+				(typeof wildcard !== "object" || wildcard === null || wildcard.select === false)
+			) {
+				throw new TypeError('TypeORM CRUD wildcard column "*" must be true or selected.');
+			}
+			for (const column of this.#repository.metadata.columns) {
+				if (!column.isVirtual && !column.isVirtualProperty) {
+					resolved[column.propertyPath] = column.propertyPath;
+				}
+			}
+		}
+		for (const [field, definition] of Object.entries(columns)) {
+			if (field === "*") continue;
+			if (definition === true) {
+				resolved[field] = field;
+				continue;
+			}
+			if (typeof definition === "string") {
+				resolved[field] = definition;
+				continue;
+			}
+			if (typeof definition !== "object" || definition === null) {
+				throw new TypeError(`TypeORM CRUD column '${field}' has an invalid definition.`);
+			}
+			resolved[field] = definition.property ?? field;
+		}
+		return Object.freeze(resolved);
+	}
+
+	#resolveConfiguredSelection(
+		options: TypeOrmCrudAdapterOptions<EntityType>,
+	): readonly string[] | undefined {
+		const entries = Object.entries(options.columns).filter(([field]) => field !== "*");
+		const wildcard = Object.hasOwn(options.columns, "*");
+		const inlineSelection =
+			wildcard ||
+			entries.some(([, definition]) => definition === true || typeof definition === "object");
+		const excluded = options.exclude ?? [];
+
+		if (options.select !== undefined) {
+			if (inlineSelection || excluded.length > 0) {
+				throw new TypeError(
+					"TypeORM CRUD select cannot be combined with inline column selection or exclude.",
+				);
+			}
+			return this.#resolveSelection(options.select);
+		}
+		if (!inlineSelection && excluded.length === 0) return undefined;
+
+		let propertyPaths =
+			wildcard || !inlineSelection
+				? this.#repository.metadata.columns
+						.filter((column) => !column.isVirtual && !column.isVirtualProperty)
+						.map((column) => column.propertyPath)
+				: entries
+						.filter(([, definition]) =>
+							typeof definition === "object" && definition !== null
+								? definition.select !== false
+								: true,
+						)
+						.map(([field]) => this.#property(field));
+
+		for (const [field, definition] of entries) {
+			if (
+				wildcard &&
+				typeof definition === "object" &&
+				definition !== null &&
+				definition.select === false
+			) {
+				propertyPaths = propertyPaths.filter((path) => path !== this.#columns[field]);
+			}
+		}
+		for (const excludedPath of excluded) {
+			const matches = this.#repository.metadata.columns.some(
+				(column) =>
+					column.propertyPath === excludedPath ||
+					column.propertyPath.startsWith(`${excludedPath}.`),
+			);
+			if (!matches) {
+				throw new TypeError(
+					`TypeORM CRUD exclude references unknown scalar property '${excludedPath}'.`,
+				);
+			}
+			propertyPaths = propertyPaths.filter(
+				(path) => path !== excludedPath && !path.startsWith(`${excludedPath}.`),
+			);
+		}
+		return this.#validateSelectedPropertyPaths(propertyPaths);
+	}
+
 	#resolveSelection(
 		selection: FindOptionsSelect<EntityType> | undefined,
 	): readonly string[] | undefined {
 		if (selection === undefined) return undefined;
-		const propertyPaths = flattenTypeOrmSelection(selection);
+		return this.#validateSelectedPropertyPaths(flattenTypeOrmSelection(selection));
+	}
+
+	#validateSelectedPropertyPaths(propertyPaths: readonly string[]): readonly string[] {
 		if (propertyPaths.length === 0) {
 			throw new TypeError("TypeORM CRUD select must include at least one scalar column.");
 		}
@@ -1232,7 +1477,11 @@ export class TypeOrmCrudAdapter<
 		const targetColumns = repository.metadata.primaryColumns.map((column) =>
 			mutation.escape(column.databaseName),
 		);
-		const target = targetColumns.length === 1 ? targetColumns[0]! : `(${targetColumns.join(", ")})`;
+		const firstTargetColumn = targetColumns[0];
+		if (firstTargetColumn === undefined) {
+			throw new CrudAdapterError("unknown", "The TypeORM entity does not have a primary column.");
+		}
+		const target = targetColumns.length === 1 ? firstTargetColumn : `(${targetColumns.join(", ")})`;
 		return mutation.where(`${target} IN (${selector.getQuery()})`, selector.getParameters());
 	}
 
@@ -1288,11 +1537,10 @@ export class TypeOrmCrudAdapter<
 				"TypeORM did not return the requested columns for the CRUD mutation.",
 			);
 		}
-		const values = raw as Readonly<Record<string, unknown>>;
 		const record = repository.metadata.create(repository.queryRunner, { fromDeserializer: true });
 		for (const propertyPath of propertyPaths) {
 			const column = repository.metadata.findColumnWithPropertyPathStrict(propertyPath);
-			if (column === undefined || !Object.hasOwn(values, column.databaseName)) {
+			if (column === undefined || !Object.hasOwn(raw, column.databaseName)) {
 				throw new CrudAdapterError(
 					"unknown",
 					`TypeORM omitted requested property '${propertyPath}' from the CRUD mutation result.`,
@@ -1301,7 +1549,7 @@ export class TypeOrmCrudAdapter<
 			column.setEntityValue(
 				record,
 				repository.manager.connection.driver.prepareHydratedValue(
-					values[column.databaseName],
+					Reflect.get(raw, column.databaseName),
 					column,
 				),
 			);
@@ -1423,7 +1671,7 @@ export class TypeOrmCrudAdapter<
 		for (const order of input.order ?? []) {
 			query.addOrderBy(
 				this.#fieldExpression(query, order.field),
-				order.direction.toUpperCase() as "ASC" | "DESC",
+				typeOrmOrderDirection(order.direction),
 			);
 		}
 		if (lock && context.session) query.setLock("pessimistic_write");
@@ -1490,24 +1738,63 @@ export class TypeOrmCrudAdapter<
 	}
 }
 
-export function createTypeOrmCrudAdapter<EntityType extends ObjectLiteral>(
-	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select"> & { readonly select?: undefined },
-): TypeOrmCrudAdapter<EntityType>;
+class ConcreteTypeOrmCrudAdapter<
+	EntityType extends ObjectLiteral,
+	RecordType extends ObjectLiteral = EntityType,
+> extends TypeOrmCrudAdapter<EntityType, RecordType> {
+	constructor(options: TypeOrmCrudAdapterOptions<EntityType>) {
+		super(options, TYPEORM_CRUD_ADAPTER_FACTORY);
+	}
+}
+
+function isTypeOrmCrudAdapterOptions(
+	value: unknown,
+): value is TypeOrmCrudAdapterOptions<ObjectLiteral> {
+	if (typeof value !== "object" || value === null) return false;
+	const repository = Reflect.get(value, "repository");
+	const columns = Reflect.get(value, "columns");
+	return (
+		typeof repository === "object" &&
+		repository !== null &&
+		typeof columns === "object" &&
+		columns !== null &&
+		!Array.isArray(columns)
+	);
+}
+
 export function createTypeOrmCrudAdapter<
 	EntityType extends ObjectLiteral,
 	const Selection extends FindOptionsSelect<EntityType> = FindOptionsSelect<EntityType>,
 >(
-	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select"> & { readonly select: Selection },
+	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select" | "exclude"> & {
+		readonly select: Selection;
+		readonly exclude?: undefined;
+	},
 ): TypeOrmCrudAdapter<EntityType, TypeOrmCrudSelectedRecord<EntityType, Selection>>;
+export function createTypeOrmCrudAdapter<EntityType extends ObjectLiteral>(
+	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "columns" | "select" | "exclude"> & {
+		readonly columns: Readonly<Record<string, TypeOrmCrudPropertyPath<EntityType>>>;
+		readonly select?: undefined;
+		readonly exclude?: undefined;
+	},
+): TypeOrmCrudAdapter<EntityType>;
+export function createTypeOrmCrudAdapter<
+	EntityType extends ObjectLiteral,
+	const Columns extends Readonly<Record<string, unknown>>,
+	const Excluded extends readonly TypeOrmCrudPropertyPath<EntityType>[] = readonly [],
+>(
+	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "columns" | "select" | "exclude"> & {
+		readonly columns: Columns & TypeOrmCrudValidatedColumns<EntityType, Columns>;
+		readonly select?: undefined;
+		readonly exclude?: Excluded;
+	},
+): TypeOrmCrudAdapter<EntityType, TypeOrmCrudConfiguredRecord<EntityType, Columns, Excluded>>;
 export function createTypeOrmCrudAdapter<EntityType extends ObjectLiteral>(
 	options: TypeOrmCrudAdapterOptions<EntityType>,
 ): TypeOrmCrudAdapter<EntityType, TypeOrmCrudRecord<EntityType, FindOptionsSelect<EntityType>>>;
 export function createTypeOrmCrudAdapter(options: unknown): unknown {
-	const AdapterConstructor = TypeOrmCrudAdapter as unknown as new <
-		EntityType extends ObjectLiteral,
-		RecordType extends ObjectLiteral = EntityType,
-	>(
-		options: TypeOrmCrudAdapterOptions<EntityType>,
-	) => TypeOrmCrudAdapter<EntityType, RecordType>;
-	return new AdapterConstructor(options as TypeOrmCrudAdapterOptions<ObjectLiteral>);
+	if (!isTypeOrmCrudAdapterOptions(options)) {
+		throw new TypeError("TypeORM CRUD adapter options require a repository and columns object.");
+	}
+	return new ConcreteTypeOrmCrudAdapter(options);
 }
