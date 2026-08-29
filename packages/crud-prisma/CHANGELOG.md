@@ -1,5 +1,12 @@
 # @nestm/crud-prisma
 
+## 0.1.0-alpha.13
+
+### Patch Changes
+
+- Updated dependencies [d93753e]
+  - @nestm/crud@0.1.0-alpha.13
+
 ## 0.1.0-alpha.12
 
 ### Patch Changes
