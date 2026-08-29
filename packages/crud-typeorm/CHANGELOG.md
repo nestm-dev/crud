@@ -1,5 +1,22 @@
 # @nestm/crud-typeorm
 
+## 0.1.0-alpha.13
+
+### Minor Changes
+
+- d93753e: Automatically copy declared same-name scope-create values so ordinary bindings no
+  longer need a mapper or repetitive unknown-value guards. Custom renamed mappings
+  continue to receive honest `unknown` values.
+
+  Add autocomplete-friendly TypeORM column definitions with inline selection,
+  wildcard mapping, typed exclusions, an isolation-level enum, and a single nested
+  transaction object containing both requirements and the application runner.
+
+### Patch Changes
+
+- Updated dependencies [d93753e]
+  - @nestm/crud@0.1.0-alpha.13
+
 ## 0.1.0-alpha.12
 
 ### Patch Changes
