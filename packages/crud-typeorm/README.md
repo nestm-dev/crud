@@ -173,7 +173,7 @@ path.
 ## Atomic upsert
 
 When a resource enables the core `upsert` operation, configure its binding with
-the complete TypeORM primary identity and the exact persistence fields that may
+a complete TypeORM conflict identity and the exact persistence fields that may
 change on conflict:
 
 ```ts
@@ -194,11 +194,17 @@ const viewerBindings = bindTypeOrmCrud({
 ```
 
 Both lists contain TypeORM entity property paths, not public CRUD field names or
-database column names. `conflictFields` must be non-empty, map exactly once to
-every primary column, and have non-null values in the final scoped insert row.
-`overwriteFields` must be unique, non-primary scalar columns that TypeORM permits
-on both insert and update. This explicit allowlist prevents an upsert from
-silently replacing immutable ownership or secret fields.
+database column names. `conflictFields` must be non-empty, have non-null values
+in the final scoped insert row, and map exactly once to either every primary
+column, every column in a non-deferrable unique constraint, or every column in a
+non-partial unique index. This allows a generated primary key to remain absent
+when an alternate domain identity is the conflict target. Deferrable unique
+constraints and partial unique indexes are rejected because this contract does
+not carry the extra PostgreSQL conflict-target semantics they require.
+`overwriteFields` must be unique, disjoint from the conflict fields, and map to
+non-primary scalar columns that TypeORM permits on both insert and update. This
+explicit allowlist prevents an upsert from silently replacing immutable
+ownership or secret fields.
 
 The adapter emits one PostgreSQL `INSERT ... ON CONFLICT (...) DO UPDATE ...
 WHERE ... RETURNING ...` statement. The normal CRUD predicate and native

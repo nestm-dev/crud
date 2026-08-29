@@ -61,6 +61,24 @@ const UPSERT_INPUT = {
 	overwriteFields: ["name"],
 } as const satisfies CrudUpsertInput<DeepPartial<UpsertEntity>>;
 
+const UNIQUE_UPSERT_INPUT = {
+	conflictFields: ["tenantId", "immutable"],
+	predicate: {
+		kind: "and",
+		predicates: [
+			{ kind: "comparison", field: "tenantId", operator: "eq", value: "tenant-a" },
+			{ kind: "comparison", field: "immutable", operator: "eq", value: "fixed" },
+		],
+	},
+	values: {
+		tenantId: "tenant-a",
+		name: "Grace",
+		secret: "ciphertext",
+		immutable: "fixed",
+	},
+	overwriteFields: ["name"],
+} as const satisfies CrudUpsertInput<DeepPartial<UpsertEntity>>;
+
 interface ColumnCapture {
 	readonly propertyPath: string;
 	readonly databaseName: string;
@@ -105,6 +123,15 @@ interface UpsertHarnessOptions {
 	readonly treeType?: string;
 	readonly inheritancePattern?: string;
 	readonly childEntityCount?: number;
+	readonly primaryFields?: readonly Extract<keyof UpsertEntity, string>[];
+	readonly uniqueConstraints?: readonly {
+		readonly fields: readonly Extract<keyof UpsertEntity, string>[];
+		readonly deferrable?: string;
+	}[];
+	readonly uniqueIndexes?: readonly {
+		readonly fields: readonly Extract<keyof UpsertEntity, string>[];
+		readonly where?: string;
+	}[];
 }
 
 function setProperty(target: Record<string, unknown>, path: string, value: unknown): void {
@@ -126,18 +153,19 @@ function createUpsertHarness(options: UpsertHarnessOptions = {}): UpsertHarness 
 	const prepareHydratedValue = vi.fn((value: unknown, column: ColumnCapture) =>
 		column.propertyPath === "name" ? `hydrated:${String(value)}` : value,
 	);
+	const primaryFields = new Set(options.primaryFields ?? ["tenantId", "id"]);
 	const columnDefinitions = [
-		["tenantId", "tenant_id", true, true, true],
-		["id", "id", true, true, true],
-		["name", "display_name", false, true, true],
-		["secret", "secret_ciphertext", false, true, true],
-		["immutable", "immutable_value", false, true, false],
+		["tenantId", "tenant_id", true, true],
+		["id", "id", true, true],
+		["name", "display_name", true, true],
+		["secret", "secret_ciphertext", true, true],
+		["immutable", "immutable_value", true, false],
 	] as const;
 	const columns = columnDefinitions.map(
-		([propertyPath, databaseName, isPrimary, isInsert, isUpdate]): ColumnCapture => ({
+		([propertyPath, databaseName, isInsert, isUpdate]): ColumnCapture => ({
 			propertyPath,
 			databaseName,
-			isPrimary,
+			isPrimary: primaryFields.has(propertyPath),
 			isInsert,
 			isUpdate,
 			isVirtual: false,
@@ -147,6 +175,12 @@ function createUpsertHarness(options: UpsertHarnessOptions = {}): UpsertHarness 
 		}),
 	);
 	const columnByPath = new Map(columns.map((column) => [column.propertyPath, column]));
+	const metadataColumns = (fields: readonly Extract<keyof UpsertEntity, string>[]) =>
+		fields.map((field) => {
+			const column = columnByPath.get(field);
+			if (column === undefined) throw new Error(`Unknown harness column '${field}'.`);
+			return column;
+		});
 
 	let repository: Repository<UpsertEntity>;
 	const manager = {
@@ -264,6 +298,15 @@ function createUpsertHarness(options: UpsertHarnessOptions = {}): UpsertHarness 
 		tableName: "upsert_entity",
 		columns,
 		primaryColumns: columns.filter((column) => column.isPrimary),
+		uniques: (options.uniqueConstraints ?? []).map((unique) => ({
+			columns: metadataColumns(unique.fields),
+			...(unique.deferrable === undefined ? {} : { deferrable: unique.deferrable }),
+		})),
+		indices: (options.uniqueIndexes ?? []).map((index) => ({
+			isUnique: true,
+			columns: metadataColumns(index.fields),
+			...(index.where === undefined ? {} : { where: index.where }),
+		})),
 		findColumnWithPropertyPath: (path: string) => columnByPath.get(path),
 		findColumnWithPropertyPathStrict: (path: string) => columnByPath.get(path),
 		create: () => ({}),
@@ -352,6 +395,28 @@ describe("TypeOrmCrudAdapter atomic upsert", () => {
 		);
 	});
 
+	it.each(["constraint", "index"] as const)(
+		"accepts a complete non-primary unique %s while the generated primary value is absent",
+		async (kind) => {
+			const unique = { fields: ["tenantId", "immutable"] as const };
+			const harness = createUpsertHarness({
+				primaryFields: ["id"],
+				...(kind === "constraint" ? { uniqueConstraints: [unique] } : { uniqueIndexes: [unique] }),
+			});
+
+			const result = await selectedAdapter(harness).upsert(UNIQUE_UPSERT_INPUT, context());
+
+			expect(harness.capture.inserts[0]).toEqual(
+				expect.objectContaining({
+					conflict: ["tenant_id", "immutable_value"],
+					overwrite: ["display_name"],
+					values: expect.not.objectContaining({ id: expect.anything() }),
+				}),
+			);
+			expect(result).toMatchObject({ id: "item-1", name: "hydrated:Grace" });
+		},
+	);
+
 	it("returns null without hydrating when the conflicting row fails authorization", async () => {
 		const harness = createUpsertHarness({ returned: [] });
 		const result = await selectedAdapter(harness).upsert(UPSERT_INPUT, context());
@@ -400,7 +465,7 @@ describe("TypeOrmCrudAdapter atomic upsert", () => {
 		});
 	});
 
-	it("rejects partial, duplicated, non-primary, and absent conflict paths before DML", async () => {
+	it("rejects partial, duplicated, non-unique, and absent conflict paths before DML", async () => {
 		const cases: readonly CrudUpsertInput<DeepPartial<UpsertEntity>>[] = [
 			{ ...UPSERT_INPUT, conflictFields: ["tenantId"] },
 			{ ...UPSERT_INPUT, conflictFields: ["tenantId", "tenantId"] },
@@ -421,6 +486,31 @@ describe("TypeOrmCrudAdapter atomic upsert", () => {
 			await expect(selectedAdapter(harness).upsert(input, context())).rejects.toMatchObject({
 				code: "unsupported",
 			} satisfies Partial<CrudAdapterError>);
+			expect(harness.capture.inserts).toHaveLength(0);
+		}
+	});
+
+	it("rejects deferrable unique constraints and partial unique indexes before DML", async () => {
+		const cases: readonly UpsertHarnessOptions[] = [
+			{
+				primaryFields: ["id"],
+				uniqueConstraints: [
+					{ fields: ["tenantId", "immutable"], deferrable: "INITIALLY DEFERRED" },
+				],
+			},
+			{
+				primaryFields: ["id"],
+				uniqueIndexes: [
+					{ fields: ["tenantId", "immutable"], where: '"immutable_value" IS NOT NULL' },
+				],
+			},
+		];
+
+		for (const options of cases) {
+			const harness = createUpsertHarness(options);
+			await expect(
+				selectedAdapter(harness).upsert(UNIQUE_UPSERT_INPUT, context()),
+			).rejects.toMatchObject({ code: "unsupported" } satisfies Partial<CrudAdapterError>);
 			expect(harness.capture.inserts).toHaveLength(0);
 		}
 	});

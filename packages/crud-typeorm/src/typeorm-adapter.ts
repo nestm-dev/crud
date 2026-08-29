@@ -426,6 +426,32 @@ function scalarMutationColumn(
 	return column === undefined || column.isVirtual || column.isVirtualProperty ? undefined : column;
 }
 
+function isUpsertConflictIdentity(
+	metadata: EntityMetadata,
+	columns: readonly TypeOrmColumnMetadata[],
+): boolean {
+	if (sameColumnSet(columns, metadata.primaryColumns)) return true;
+	if (
+		metadata.uniques.some(
+			(unique) => unique.deferrable === undefined && sameColumnSet(columns, unique.columns),
+		)
+	) {
+		return true;
+	}
+	return metadata.indices.some(
+		(index) => index.isUnique && index.where === undefined && sameColumnSet(columns, index.columns),
+	);
+}
+
+function sameColumnSet(
+	left: readonly TypeOrmColumnMetadata[],
+	right: readonly TypeOrmColumnMetadata[],
+): boolean {
+	if (left.length === 0 || left.length !== right.length) return false;
+	const expected = new Set(right);
+	return expected.size === right.length && left.every((column) => expected.has(column));
+}
+
 function strongestIsolationLevel(
 	...levels: readonly (TypeOrmCrudTransactionIsolationLevel | undefined)[]
 ): TypeOrmCrudTransactionIsolationLevel {
@@ -1288,29 +1314,22 @@ export class TypeOrmCrudAdapter<
 		entity: EntityType,
 		propertyPaths: readonly string[],
 	): string[] {
-		const primaryColumns = repository.metadata.primaryColumns;
-		if (propertyPaths.length !== primaryColumns.length || propertyPaths.length === 0) {
+		if (propertyPaths.length === 0) {
 			throw new CrudAdapterError(
 				"unsupported",
-				"TypeORM CRUD upsert conflict fields must map to the complete primary identity.",
-			);
-		}
-		if (primaryColumns.some((column) => column.isVirtual || column.isVirtualProperty)) {
-			throw new CrudAdapterError(
-				"unsupported",
-				"TypeORM CRUD upsert requires a physical scalar primary identity.",
+				"TypeORM CRUD upsert conflict fields must map to a complete primary or unique identity.",
 			);
 		}
 
-		const expected = new Set(primaryColumns);
 		const seenColumns = new Set<TypeOrmColumnMetadata>();
+		const conflictColumns: TypeOrmColumnMetadata[] = [];
 		const databaseNames: string[] = [];
 		for (const propertyPath of propertyPaths) {
 			const column = scalarMutationColumn(repository.metadata, propertyPath);
-			if (column === undefined || !expected.has(column) || seenColumns.has(column)) {
+			if (column === undefined || !column.isInsert || seenColumns.has(column)) {
 				throw new CrudAdapterError(
 					"unsupported",
-					"TypeORM CRUD upsert conflict fields must map to the complete primary identity.",
+					"TypeORM CRUD upsert conflict fields must map to a complete physical primary or unique identity.",
 				);
 			}
 			if (column.getEntityValue(entity) === undefined || column.getEntityValue(entity) === null) {
@@ -1320,12 +1339,13 @@ export class TypeOrmCrudAdapter<
 				);
 			}
 			seenColumns.add(column);
+			conflictColumns.push(column);
 			databaseNames.push(column.databaseName);
 		}
-		if (seenColumns.size !== expected.size) {
+		if (!isUpsertConflictIdentity(repository.metadata, conflictColumns)) {
 			throw new CrudAdapterError(
 				"unsupported",
-				"TypeORM CRUD upsert conflict fields must map to the complete primary identity.",
+				"TypeORM CRUD upsert conflict fields must map to the complete primary identity, a non-deferrable unique constraint, or a non-partial unique index.",
 			);
 		}
 		return databaseNames;
