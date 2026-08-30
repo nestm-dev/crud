@@ -472,7 +472,7 @@ describe("TypeOrmCrudAdapter row predicate", () => {
 		expect(runner.contexts[0]).toMatchObject({
 			operation: "create",
 			accessMode: "read write",
-			isolationLevel: "repeatable read",
+			isolationLevel: "REPEATABLE READ",
 			mustOwnCommit: true,
 		});
 	});
@@ -546,7 +546,7 @@ describe("TypeOrmCrudAdapter transaction runner", () => {
 		expect(runner.contexts[1]).toMatchObject({
 			operation: "list",
 			accessMode: "read only",
-			isolationLevel: "read committed",
+			isolationLevel: "READ COMMITTED",
 			mustOwnCommit: false,
 		});
 		// The runner owns the transaction; the adapter must not open its own.

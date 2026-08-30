@@ -1,6 +1,7 @@
 import { crudOperations, defineCrudResource } from "@nestm/crud";
 import type { CrudAdapter, CrudAdapterSession } from "@nestm/crud/adapter";
 import { Brackets, type DeepPartial, type Repository } from "typeorm";
+import type { IsolationLevel } from "typeorm/driver/types/IsolationLevel.js";
 import { z } from "zod";
 
 import {
@@ -13,6 +14,14 @@ import {
 	type TypeOrmCrudAdapterOptions,
 	type TypeOrmCrudSelectedRecord,
 } from "../src/index.ts";
+
+const nativeIsolationLevel: IsolationLevel = TypeOrmCrudTransactionIsolationLevel.RepeatableRead;
+const configuredIsolationLevel: TypeOrmCrudTransactionIsolationLevel = "READ COMMITTED";
+// @ts-expect-error The CRUD lifecycle deliberately supports only its documented subset.
+const unsupportedIsolationLevel: TypeOrmCrudTransactionIsolationLevel = "SERIALIZABLE";
+void nativeIsolationLevel;
+void configuredIsolationLevel;
+void unsupportedIsolationLevel;
 
 class UserProfile {
 	readonly nickname!: string;
@@ -129,7 +138,7 @@ createTypeOrmCrudAdapter({
 	repository,
 	columns: { id: "id" },
 	transaction: {
-		// @ts-expect-error Isolation is intentionally an enum, not a free-form string.
+		// @ts-expect-error TypeORM isolation values use their native uppercase spelling.
 		isolationLevel: "repeatable read",
 	},
 });

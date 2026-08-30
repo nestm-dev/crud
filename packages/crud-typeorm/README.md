@@ -90,6 +90,10 @@ const documentsAdapter = createTypeOrmCrudAdapter({
 });
 ```
 
+The exported members use TypeORM's native uppercase `IsolationLevel` values,
+so they can be passed directly to `QueryRunner.startTransaction()` and other
+TypeORM transaction APIs.
+
 This is distinct from `rowPredicate.transaction`, which describes only the
 predicate's own read/update/delete requirement. An operation-wide requirement
 also applies to create hooks and validators, where a nested policy-store read

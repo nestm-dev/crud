@@ -25,6 +25,7 @@ import {
 	type Repository,
 	type SelectQueryBuilder,
 } from "typeorm";
+import type { IsolationLevel } from "typeorm/driver/types/IsolationLevel.js";
 
 import { compileTypeOrmPredicate } from "./typeorm-predicate.ts";
 
@@ -248,10 +249,13 @@ export const TYPEORM_CRUD_REFERENCE_ALIAS = "crud_reference";
 const TYPEORM_CRUD_ADAPTER_FACTORY = Symbol("@nestm/crud-typeorm:adapter-factory");
 
 export type TypeOrmCrudTransactionAccessMode = "read only" | "read write";
-export enum TypeOrmCrudTransactionIsolationLevel {
-	ReadCommitted = "read committed",
-	RepeatableRead = "repeatable read",
-}
+/** TypeORM-native isolation levels supported by the CRUD transaction lifecycle. */
+export const TypeOrmCrudTransactionIsolationLevel = {
+	ReadCommitted: "READ COMMITTED",
+	RepeatableRead: "REPEATABLE READ",
+} as const satisfies Record<"ReadCommitted" | "RepeatableRead", IsolationLevel>;
+export type TypeOrmCrudTransactionIsolationLevel =
+	(typeof TypeOrmCrudTransactionIsolationLevel)[keyof typeof TypeOrmCrudTransactionIsolationLevel];
 
 export interface TypeOrmCrudTransactionRequirements {
 	readonly accessMode: TypeOrmCrudTransactionAccessMode;
@@ -1279,11 +1283,7 @@ export class TypeOrmCrudAdapter<
 	): Promise<Result> {
 		const queryRunner = this.#repository.manager.connection.createQueryRunner();
 		await queryRunner.connect();
-		await queryRunner.startTransaction(
-			requirements.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead
-				? "REPEATABLE READ"
-				: "READ COMMITTED",
-		);
+		await queryRunner.startTransaction(requirements.isolationLevel);
 		try {
 			if (requirements.accessMode === "read only") {
 				await queryRunner.query("SET TRANSACTION READ ONLY");
