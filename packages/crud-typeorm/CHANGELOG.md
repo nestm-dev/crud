@@ -1,5 +1,18 @@
 # @nestm/crud-typeorm
 
+## 0.1.0-alpha.14
+
+### Minor Changes
+
+- 5aed549: Replace `TypeOrmCrudTransactionIsolationLevel`'s lowercase string enum with a
+  same-name const object and derived union type whose supported values use
+  TypeORM's native uppercase `IsolationLevel` spelling. Member access remains
+  unchanged, while values can now pass directly to TypeORM transaction APIs.
+
+### Patch Changes
+
+- @nestm/crud@0.1.0-alpha.14
+
 ## 0.1.0-alpha.13
 
 ### Minor Changes
