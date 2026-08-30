@@ -23,6 +23,7 @@ const childResponseSchema = z.object({
 });
 
 export const userResource = defineCrudResource({
+	fields: ["id", "name", "tenantId", "deletedAt"],
 	name: "users",
 	path: "/api/users/",
 	itemPath: ":id",
@@ -64,7 +65,6 @@ export function createUserBinding(adapter: FakeCrudAdapter) {
 	return defineCrudBinding({
 		resource: userResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "name", "tenantId", "deletedAt"],
 		mappings: {
 			create: (input) => ({
 				name: input.name,
@@ -123,6 +123,7 @@ export function createUserService(options: CreateUserServiceOptions = {}) {
 }
 
 export const compositeResource = defineCrudResource({
+	fields: ["tenantId", "id", "role"],
 	name: "memberships",
 	path: "memberships",
 	itemPath: ":tenantId/:id",
@@ -141,7 +142,6 @@ export function createCompositeBinding(adapter: FakeCrudAdapter) {
 	return defineCrudBinding({
 		resource: compositeResource,
 		adapter: { useValue: adapter },
-		fields: ["tenantId", "id", "role"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,

@@ -11,6 +11,7 @@ export {
 	type DrizzleCrudAdapterOptions,
 	type DrizzleCrudDatabase,
 	type DrizzleCrudEffectiveTransaction,
+	type DrizzleCrudLogicalField,
 	type DrizzleCrudOperationTransactionOptions,
 	type DrizzleCrudRowPredicate,
 	type DrizzleCrudRowPredicateContext,
@@ -21,4 +22,8 @@ export {
 	type DrizzleCrudTransactionRunner,
 	type DrizzleCrudTransactionRunnerContext,
 } from "./drizzle-adapter.ts";
-export { compileDrizzlePredicate, type DrizzleCrudColumns } from "./drizzle-predicate.ts";
+export {
+	compileDrizzlePredicate,
+	type DrizzleCrudColumns,
+	type DrizzleCrudTableColumn,
+} from "./drizzle-predicate.ts";

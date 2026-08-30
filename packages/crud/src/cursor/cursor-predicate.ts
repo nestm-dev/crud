@@ -5,21 +5,21 @@ import { CrudCursorError } from "./cursor.error.ts";
  * Produces `(a > A) OR (a = A AND b > B) ...`, reversing comparisons for
  * descending order, so adapters can compile a portable keyset predicate.
  */
-export function buildCrudCursorPredicate(
-	order: readonly CrudOrder[],
+export function buildCrudCursorPredicate<Field extends string>(
+	order: readonly CrudOrder<Field>[],
 	values: readonly unknown[],
-): CrudPredicate {
+): CrudPredicate<Field> {
 	if (order.length === 0 || order.length !== values.length) {
 		throw new CrudCursorError("invalid_payload");
 	}
-	const branches: CrudPredicate[] = [];
+	const branches: CrudPredicate<Field>[] = [];
 	for (let index = 0; index < order.length; index += 1) {
 		const currentOrder = order[index];
 		const currentValue = values[index];
 		if (currentOrder === undefined || currentValue === null || currentValue === undefined) {
 			throw new CrudCursorError("invalid_payload");
 		}
-		const comparisons: CrudPredicate[] = [];
+		const comparisons: CrudPredicate<Field>[] = [];
 		for (let prefixIndex = 0; prefixIndex < index; prefixIndex += 1) {
 			const prefixOrder = order[prefixIndex];
 			const prefixValue = values[prefixIndex];

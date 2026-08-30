@@ -264,7 +264,15 @@ describe("TypeOrmCrudAdapter construction", () => {
 		});
 		await expect(
 			adapter.findOne(
-				{ predicate: { kind: "comparison", field: "secret", operator: "eq", value: 1 } },
+				{
+					predicate: {
+						kind: "comparison",
+						// The cast deliberately bypasses the public field vocabulary to exercise runtime defense.
+						field: "secret" as "id",
+						operator: "eq",
+						value: 1,
+					},
+				},
 				context("read"),
 			),
 		).rejects.toMatchObject({ code: "unsupported" });

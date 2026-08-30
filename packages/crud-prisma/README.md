@@ -23,7 +23,6 @@ const usersAdapter = createPrismaCrudAdapter({
 
 const usersBinding = bindPrismaCrud({
 	resource: users,
-	fields: ["id", "email", "createdAt"],
 	adapter: { useValue: usersAdapter },
 	mappings: {
 		create: (input) => input,

@@ -6,9 +6,9 @@ import {
 	type CrudCursorCodec,
 } from "./cursor.types.ts";
 
-export async function encodeCrudCursor(
+export async function encodeCrudCursor<Field extends string>(
 	codec: CrudCursorCodec,
-	binding: CrudCursorBinding,
+	binding: CrudCursorBinding<Field>,
 	values: readonly unknown[],
 ): Promise<string> {
 	assertFixedValues(binding, values);
@@ -21,11 +21,11 @@ export async function encodeCrudCursor(
 }
 
 /** Decodes a cursor and verifies that it belongs to the requested resource and exact ordering. */
-export async function decodeCrudCursor(
+export async function decodeCrudCursor<Field extends string>(
 	codec: CrudCursorCodec,
 	token: string,
-	binding: CrudCursorBinding,
-): Promise<CrudCursor> {
+	binding: CrudCursorBinding<Field>,
+): Promise<CrudCursor<Field>> {
 	let cursor: CrudCursor;
 	try {
 		cursor = await codec.decode(token);
@@ -44,10 +44,13 @@ export async function decodeCrudCursor(
 		throw new CrudCursorError("binding_mismatch");
 	}
 	assertFixedValues(binding, cursor.values);
-	return cursor;
+	return cursor as CrudCursor<Field>;
 }
 
-function assertFixedValues(binding: CrudCursorBinding, values: readonly unknown[]): void {
+function assertFixedValues<Field extends string>(
+	binding: CrudCursorBinding<Field>,
+	values: readonly unknown[],
+): void {
 	for (const fixed of binding.fixed ?? []) {
 		const indices = binding.order.flatMap((order, index) =>
 			order.field === fixed.field ? [index] : [],

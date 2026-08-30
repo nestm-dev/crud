@@ -18,6 +18,7 @@ const platforms = [
 ] as const;
 
 const nestedItemResource = defineCrudResource({
+	fields: ["projectId", "id", "name"],
 	name: "http-nested-items",
 	path: "http/projects/:projectId/items",
 	itemPath: ":itemId",
@@ -56,7 +57,6 @@ describe.each(platforms)("nested generated HTTP contract on %s", (_name, createA
 		const binding = defineCrudBinding({
 			resource: nestedItemResource,
 			adapter: { useValue: adapter },
-			fields: ["projectId", "id", "name"],
 			scopeCreateFields: ["projectId"],
 			upsert: {
 				conflictFields: ["projectId", "id"],

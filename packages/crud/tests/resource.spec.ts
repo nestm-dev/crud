@@ -28,7 +28,7 @@ describe("defineCrudResource", () => {
 	});
 
 	it("snapshots nested routing and query configuration", () => {
-		const fields = ["id", "name"];
+		const fields: ("id" | "name")[] = ["id", "name"];
 		const operators = ["eq"] as const;
 		const operations: CrudOperations = { list: {} };
 		const definition = {
@@ -36,12 +36,12 @@ describe("defineCrudResource", () => {
 			operations,
 			query: {
 				filters: { name: { schema: z.string(), operators } },
-				sort: { fields, default: ["id"] },
+				sort: { fields, default: ["id"] as const },
 			},
 		};
 		const resource = defineCrudResource(definition);
 
-		fields.push("mutated");
+		(fields as string[]).push("mutated");
 		operations.read = {};
 		expect(resource.query?.sort?.fields).toEqual(["id", "name"]);
 		expect(Object.keys(resource.operations)).toEqual(["list"]);
@@ -51,6 +51,7 @@ describe("defineCrudResource", () => {
 
 	it("snapshots and freezes nested path parameter configuration", () => {
 		const resource = defineCrudResource({
+			fields: ["artifactId", "versionId"],
 			name: "artifact-versions",
 			path: "artifacts/:artifactId/versions",
 			itemPath: ":versionId",
@@ -127,13 +128,12 @@ describe("defineCrudResource", () => {
 		expect(Object.isFrozen(resource.validators)).toBe(true);
 	});
 
-	it("snapshots binding fields and provider metadata", () => {
-		const resource = defineCrudResource(validDefinition());
-		const fields: string[] = ["id", "name"];
+	it("snapshots resource fields and binding provider metadata", () => {
+		const fields: [string, ...string[]] = ["id", "name"];
+		const resource = defineCrudResource({ ...validDefinition(), fields });
 		const inject = [Symbol("dependency")];
 		const binding = defineCrudBinding({
 			resource,
-			fields,
 			adapter: {
 				inject,
 				useFactory: () => new FakeCrudAdapter(),
@@ -148,13 +148,50 @@ describe("defineCrudResource", () => {
 
 		fields.push("mutated");
 		inject.push(Symbol("mutated"));
-		expect(binding.fields).toEqual(["id", "name"]);
+		expect(resource.fields).toEqual(["id", "name"]);
 		expect("inject" in binding.adapter ? binding.adapter.inject : undefined).toHaveLength(1);
-		expect(Object.isFrozen(binding.fields)).toBe(true);
+		expect(Object.isFrozen(resource.fields)).toBe(true);
 		expect(Object.isFrozen(binding.adapter)).toBe(true);
 	});
 
 	it.each([
+		[
+			"an empty logical field vocabulary",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					fields: [],
+				} as unknown as CrudResourceDefinition),
+			"must declare logical fields",
+		],
+		[
+			"duplicate logical fields",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					fields: ["id", "id"],
+				} as CrudResourceDefinition),
+			"fields must contain unique values",
+		],
+		[
+			"an ID mapping outside the logical field vocabulary",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					fields: ["name"],
+				} as CrudResourceDefinition),
+			'idFields references undeclared field "id"',
+		],
+		[
+			"a query field outside the logical field vocabulary",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					fields: ["id"],
+					query: { filters: { name: { schema: z.string(), operators: ["eq"] } } },
+				} as CrudResourceDefinition),
+			'query.filters references undeclared field "name"',
+		],
 		[
 			"route parameters in the collection path without pathParams",
 			() =>
@@ -269,7 +306,7 @@ describe("defineCrudResource", () => {
 				defineCrudResource({
 					...validDefinition(),
 					idFields: { id: " " },
-				}),
+				} as CrudResourceDefinition),
 			"idFields must contain non-empty strings",
 		],
 		[
@@ -278,7 +315,7 @@ describe("defineCrudResource", () => {
 				defineCrudResource({
 					...validDefinition(),
 					softDelete: { field: "" },
-				}),
+				} as CrudResourceDefinition),
 			"softDelete.field must contain non-empty strings",
 		],
 		[
@@ -426,7 +463,7 @@ describe("defineCrudResource", () => {
 						sort: { fields: ["id"], cursor: ["createdAt"] },
 						pagination: { cursor: true },
 					},
-				}),
+				} as CrudResourceDefinition),
 			"must also appear in sort.fields",
 		],
 		[
@@ -484,11 +521,11 @@ describe("defineCrudResource", () => {
 						broken: {
 							type: "hasMany",
 							target: () => defineCrudResource(validDefinition()),
-							local: [],
-							foreign: [],
+							local: [] as unknown as [string, ...string[]],
+							foreign: [] as unknown as [string, ...string[]],
 						},
 					},
-				}),
+				} as CrudResourceDefinition),
 			"equally-sized, non-empty key tuples",
 		],
 		[
@@ -507,8 +544,8 @@ describe("defineCrudResource", () => {
 
 describe("defineCrudRelation", () => {
 	it("snapshots key tuples and freezes the relation", () => {
-		const local = ["tenantId", "id"];
-		const foreign = ["tenantId", "widgetId"];
+		const local: ["tenantId", "id"] = ["tenantId", "id"];
+		const foreign: ["tenantId", "widgetId"] = ["tenantId", "widgetId"];
 		const relation = defineCrudRelation({
 			type: "hasMany",
 			target: () => defineCrudResource(validDefinition()),
@@ -517,8 +554,8 @@ describe("defineCrudRelation", () => {
 			maxItems: 25,
 		});
 
-		local.push("mutated");
-		foreign.push("mutated");
+		(local as string[]).push("mutated");
+		(foreign as string[]).push("mutated");
 		expect(relation.local).toEqual(["tenantId", "id"]);
 		expect(relation.foreign).toEqual(["tenantId", "widgetId"]);
 		expect(Object.isFrozen(relation)).toBe(true);
@@ -688,6 +725,32 @@ describe("CrudRegistry bootstrap validation", () => {
 		expect(() => registry.onApplicationBootstrap()).toThrowError(/unregistered resource "targets"/);
 	});
 
+	it("rejects an erased relation foreign key outside the target vocabulary", () => {
+		const target = defineCrudResource({
+			...validDefinition(),
+			name: "targets",
+			path: "targets",
+		});
+		const source = defineCrudResource({
+			...validDefinition(),
+			name: "sources",
+			path: "sources",
+			relations: {
+				targets: {
+					type: "hasMany",
+					target: () => target,
+					local: ["id"],
+					foreign: ["missing"],
+				},
+			},
+		} as CrudResourceDefinition);
+		const registry = new CrudRegistry();
+		registry.register(bindingFor(source), fakeService());
+		registry.register(bindingFor(target), fakeService());
+
+		expect(() => registry.onApplicationBootstrap()).toThrowError(/unmapped target field "missing"/);
+	});
+
 	it("rejects a relation whose registered target is nested", () => {
 		const target = defineCrudResource({
 			...validDefinition(),
@@ -761,6 +824,18 @@ describe("CrudRegistry bootstrap validation", () => {
 
 function validDefinition() {
 	return {
+		fields: [
+			"id",
+			"name",
+			"tenantId",
+			"organizationId",
+			"projectId",
+			"parentId",
+			"widgetId",
+			"deletedAt",
+			"nullableName",
+			"createdAt",
+		],
 		name: "widgets",
 		path: "widgets",
 		itemPath: ":id",
@@ -779,7 +854,6 @@ function bindingFor(resource: AnyCrudResource) {
 	return defineCrudBinding({
 		resource,
 		adapter: { useValue: new FakeCrudAdapter() },
-		fields: ["id", "name"],
 		mappings: {
 			create: () => ({}),
 			update: () => ({}),

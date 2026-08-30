@@ -1,18 +1,22 @@
-import type { AnyCrudResource } from "../resource/resource.types.ts";
+import type { AnyCrudResource, CrudField, CrudFieldTuple } from "../resource/resource.types.ts";
 
 export type CrudRelationType = "belongsTo" | "hasOne" | "hasMany";
 
-export interface CrudRelationConfig {
+export interface CrudRelationConfig<
+	LocalField extends string = string,
+	Target extends AnyCrudResource = AnyCrudResource,
+> {
 	readonly type: CrudRelationType;
-	readonly target: () => AnyCrudResource;
-	readonly local: readonly string[];
-	readonly foreign: readonly string[];
+	readonly target: () => Target;
+	readonly local: CrudFieldTuple<LocalField>;
+	readonly foreign: CrudFieldTuple<CrudField<Target>>;
 	readonly maxItems?: number;
 }
 
-export function defineCrudRelation<const Relation extends CrudRelationConfig>(
-	relation: Relation,
-): Relation {
+export function defineCrudRelation<
+	const Target extends AnyCrudResource,
+	const Relation extends CrudRelationConfig<string, Target>,
+>(relation: Relation): Relation {
 	if (!(["belongsTo", "hasOne", "hasMany"] as const).includes(relation.type)) {
 		throw new TypeError("A CRUD relation must declare a supported relation type.");
 	}

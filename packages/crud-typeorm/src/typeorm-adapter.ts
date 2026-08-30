@@ -242,6 +242,15 @@ export type TypeOrmCrudConfiguredRecord<
 			: Omit<Entity, Extract<Excluded[number], keyof Entity>>
 		: TypeOrmCrudSelectedRecord<Entity, TypeOrmCrudColumnSelection<Columns> & object>;
 
+/** Public logical field names exposed by one literal TypeORM column selection. */
+export type TypeOrmCrudLogicalField<
+	Entity extends ObjectLiteral,
+	Columns extends Readonly<Record<string, unknown>>,
+	Excluded extends readonly TypeOrmCrudPropertyPath<Entity>[] = readonly [],
+> = "*" extends keyof Columns
+	? Exclude<TypeOrmCrudPropertyPath<Entity>, Excluded[number]>
+	: Exclude<Extract<keyof Columns, string>, "*">;
+
 /** The alias every generated statement selects the resource's rows under. */
 export const TYPEORM_CRUD_ALIAS = "crud_record";
 /** The alias transaction-scoped reference lookups select their target rows under. */
@@ -348,9 +357,10 @@ export type TypeOrmCrudReferencePredicate<
 interface TypeOrmCrudReferenceInputBase<
 	EntityType extends ObjectLiteral,
 	Context extends TypeOrmCrudReferenceContext,
+	LogicalField extends string,
 > {
 	/** Neutral predicate whose fields resolve through the checker's logical column map. */
-	readonly predicate?: CrudFindOneInput["predicate"];
+	readonly predicate?: CrudFindOneInput<LogicalField>["predicate"];
 	/** Native constraint for target-specific SQL or an RLS companion predicate. */
 	readonly nativePredicate?: TypeOrmCrudReferencePredicate<EntityType, Context>;
 }
@@ -362,19 +372,25 @@ interface TypeOrmCrudReferenceInputBase<
 export type TypeOrmCrudReferenceInput<
 	EntityType extends ObjectLiteral,
 	Context extends TypeOrmCrudReferenceContext = TypeOrmCrudReferenceContext,
+	LogicalField extends string = string,
 > =
-	| (TypeOrmCrudReferenceInputBase<EntityType, Context> & {
-			readonly predicate: CrudFindOneInput["predicate"];
+	| (TypeOrmCrudReferenceInputBase<EntityType, Context, LogicalField> & {
+			readonly predicate: CrudFindOneInput<LogicalField>["predicate"];
 	  })
-	| (TypeOrmCrudReferenceInputBase<EntityType, Context> & {
+	| (TypeOrmCrudReferenceInputBase<EntityType, Context, LogicalField> & {
 			readonly nativePredicate: TypeOrmCrudReferencePredicate<EntityType, Context>;
 	  });
 
-export interface TypeOrmCrudReferenceCheckerOptions<EntityType extends ObjectLiteral> {
+export interface TypeOrmCrudReferenceCheckerOptions<
+	EntityType extends ObjectLiteral,
+	Columns extends Readonly<Record<string, TypeOrmCrudPropertyPath<EntityType>>> = Readonly<
+		Record<string, TypeOrmCrudPropertyPath<EntityType>>
+	>,
+> {
 	/** Target metadata only; lookups acquire its repository from the active source manager. */
 	readonly target: EntityTarget<EntityType>;
 	/** Maps reference-predicate logical fields to target entity scalar property paths. */
-	readonly columns: Readonly<Record<string, TypeOrmCrudPropertyPath<EntityType>>>;
+	readonly columns: Columns;
 }
 
 export interface TypeOrmCrudAdapterOptions<RecordType extends ObjectLiteral> {
@@ -701,18 +717,26 @@ function activeTypeOrmSession(context: {
  * row lock. The query selects only a constant and uses a raw result, so TypeORM never
  * hydrates the target entity or invokes its transformers and `@AfterLoad` lifecycle.
  */
-export class TypeOrmCrudReferenceChecker<EntityType extends ObjectLiteral> {
+export class TypeOrmCrudReferenceChecker<
+	EntityType extends ObjectLiteral,
+	LogicalField extends string = string,
+> {
 	readonly #target: EntityTarget<EntityType>;
 	readonly #columns: Readonly<Record<string, string>>;
 	readonly #validatedMetadata = new WeakSet<EntityMetadata>();
 
-	constructor(options: TypeOrmCrudReferenceCheckerOptions<EntityType>) {
+	constructor(
+		options: TypeOrmCrudReferenceCheckerOptions<
+			EntityType,
+			Readonly<Record<LogicalField, TypeOrmCrudPropertyPath<EntityType>>>
+		>,
+	) {
 		this.#target = options.target;
 		this.#columns = Object.freeze({ ...options.columns });
 	}
 
 	async exists<Context extends TypeOrmCrudReferenceContext>(
-		input: TypeOrmCrudReferenceInput<EntityType, Context>,
+		input: TypeOrmCrudReferenceInput<EntityType, Context, LogicalField>,
 		context: Context,
 	): Promise<boolean> {
 		try {
@@ -784,7 +808,7 @@ export class TypeOrmCrudReferenceChecker<EntityType extends ObjectLiteral> {
 		this.#validatedMetadata.add(metadata);
 	}
 
-	#fieldExpression(query: SelectQueryBuilder<EntityType>, field: string): string {
+	#fieldExpression(query: SelectQueryBuilder<EntityType>, field: LogicalField): string {
 		const propertyPath = this.#columns[field];
 		if (propertyPath === undefined) {
 			throw new CrudAdapterError(
@@ -796,16 +820,27 @@ export class TypeOrmCrudReferenceChecker<EntityType extends ObjectLiteral> {
 	}
 }
 
-export function createTypeOrmCrudReferenceChecker<EntityType extends ObjectLiteral>(
-	options: TypeOrmCrudReferenceCheckerOptions<EntityType>,
-): TypeOrmCrudReferenceChecker<EntityType> {
-	return new TypeOrmCrudReferenceChecker(options);
+export function createTypeOrmCrudReferenceChecker<
+	EntityType extends ObjectLiteral,
+	const Columns extends Readonly<Record<string, TypeOrmCrudPropertyPath<EntityType>>>,
+>(
+	options: TypeOrmCrudReferenceCheckerOptions<EntityType, Columns>,
+): TypeOrmCrudReferenceChecker<EntityType, Extract<keyof Columns, string>> {
+	return new TypeOrmCrudReferenceChecker<EntityType, Extract<keyof Columns, string>>(options);
 }
 
 export class TypeOrmCrudAdapter<
 	EntityType extends ObjectLiteral,
 	RecordType extends ObjectLiteral = EntityType,
-> implements CrudAdapter<RecordType, DeepPartial<EntityType>, DeepPartial<EntityType>> {
+	LogicalField extends string = string,
+> implements CrudAdapter<
+	RecordType,
+	DeepPartial<EntityType>,
+	DeepPartial<EntityType>,
+	TypeOrmCrudPropertyPath<EntityType>,
+	LogicalField
+> {
+	declare private readonly __logicalField: LogicalField;
 	readonly capabilities = Object.freeze({
 		transactions: true,
 		returning: true,
@@ -924,7 +959,11 @@ export class TypeOrmCrudAdapter<
 	}
 
 	async upsert(
-		input: CrudUpsertInput<DeepPartial<EntityType>>,
+		input: CrudUpsertInput<
+			DeepPartial<EntityType>,
+			TypeOrmCrudPropertyPath<EntityType>,
+			LogicalField
+		>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null> {
 		try {
@@ -981,7 +1020,10 @@ export class TypeOrmCrudAdapter<
 		}
 	}
 
-	async findOne(input: CrudFindOneInput, context: CrudAdapterContext): Promise<RecordType | null> {
+	async findOne(
+		input: CrudFindOneInput<LogicalField>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null> {
 		try {
 			return await this.#withRepository(
 				context,
@@ -1002,7 +1044,7 @@ export class TypeOrmCrudAdapter<
 	}
 
 	async findMany(
-		input: CrudFindManyInput,
+		input: CrudFindManyInput<LogicalField>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<RecordType>> {
 		try {
@@ -1041,7 +1083,7 @@ export class TypeOrmCrudAdapter<
 	}
 
 	async update(
-		input: CrudUpdateInput<DeepPartial<EntityType>>,
+		input: CrudUpdateInput<DeepPartial<EntityType>, LogicalField>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null> {
 		try {
@@ -1095,7 +1137,10 @@ export class TypeOrmCrudAdapter<
 		}
 	}
 
-	async delete(input: CrudDeleteInput, context: CrudAdapterContext): Promise<RecordType | null> {
+	async delete(
+		input: CrudDeleteInput<LogicalField>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null> {
 		try {
 			return await this.#withRepository(
 				context,
@@ -1142,7 +1187,7 @@ export class TypeOrmCrudAdapter<
 		}
 	}
 
-	getField(record: RecordType, field: string): unknown {
+	getField(record: RecordType, field: LogicalField): unknown {
 		const propertyPath = this.#property(field);
 		if (
 			this.#selectedPropertyPaths !== undefined &&
@@ -1741,7 +1786,8 @@ export class TypeOrmCrudAdapter<
 class ConcreteTypeOrmCrudAdapter<
 	EntityType extends ObjectLiteral,
 	RecordType extends ObjectLiteral = EntityType,
-> extends TypeOrmCrudAdapter<EntityType, RecordType> {
+	LogicalField extends string = string,
+> extends TypeOrmCrudAdapter<EntityType, RecordType, LogicalField> {
 	constructor(options: TypeOrmCrudAdapterOptions<EntityType>) {
 		super(options, TYPEORM_CRUD_ADAPTER_FACTORY);
 	}
@@ -1764,20 +1810,29 @@ function isTypeOrmCrudAdapterOptions(
 
 export function createTypeOrmCrudAdapter<
 	EntityType extends ObjectLiteral,
+	const Columns extends Readonly<Record<string, unknown>>,
 	const Selection extends FindOptionsSelect<EntityType> = FindOptionsSelect<EntityType>,
 >(
-	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "select" | "exclude"> & {
+	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "columns" | "select" | "exclude"> & {
+		readonly columns: Columns & TypeOrmCrudValidatedColumns<EntityType, Columns>;
 		readonly select: Selection;
 		readonly exclude?: undefined;
 	},
-): TypeOrmCrudAdapter<EntityType, TypeOrmCrudSelectedRecord<EntityType, Selection>>;
-export function createTypeOrmCrudAdapter<EntityType extends ObjectLiteral>(
+): TypeOrmCrudAdapter<
+	EntityType,
+	TypeOrmCrudSelectedRecord<EntityType, Selection>,
+	TypeOrmCrudLogicalField<EntityType, Columns>
+>;
+export function createTypeOrmCrudAdapter<
+	EntityType extends ObjectLiteral,
+	const Columns extends Readonly<Record<string, TypeOrmCrudPropertyPath<EntityType>>>,
+>(
 	options: Omit<TypeOrmCrudAdapterOptions<EntityType>, "columns" | "select" | "exclude"> & {
-		readonly columns: Readonly<Record<string, TypeOrmCrudPropertyPath<EntityType>>>;
+		readonly columns: Columns;
 		readonly select?: undefined;
 		readonly exclude?: undefined;
 	},
-): TypeOrmCrudAdapter<EntityType>;
+): TypeOrmCrudAdapter<EntityType, EntityType, TypeOrmCrudLogicalField<EntityType, Columns>>;
 export function createTypeOrmCrudAdapter<
 	EntityType extends ObjectLiteral,
 	const Columns extends Readonly<Record<string, unknown>>,
@@ -1788,7 +1843,11 @@ export function createTypeOrmCrudAdapter<
 		readonly select?: undefined;
 		readonly exclude?: Excluded;
 	},
-): TypeOrmCrudAdapter<EntityType, TypeOrmCrudConfiguredRecord<EntityType, Columns, Excluded>>;
+): TypeOrmCrudAdapter<
+	EntityType,
+	TypeOrmCrudConfiguredRecord<EntityType, Columns, Excluded>,
+	TypeOrmCrudLogicalField<EntityType, Columns, Excluded>
+>;
 export function createTypeOrmCrudAdapter<EntityType extends ObjectLiteral>(
 	options: TypeOrmCrudAdapterOptions<EntityType>,
 ): TypeOrmCrudAdapter<EntityType, TypeOrmCrudRecord<EntityType, FindOptionsSelect<EntityType>>>;

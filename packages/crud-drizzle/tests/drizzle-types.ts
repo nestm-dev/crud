@@ -29,6 +29,25 @@ export const adapter = createDrizzleCrudAdapter({
 	transaction: { isolationLevel: "repeatable read" },
 });
 
+createDrizzleCrudAdapter({
+	database,
+	table: users,
+	columns: {
+		// @ts-expect-error mapped columns must belong to the configured table.
+		ownerId: scopedUsers.ownerId,
+	},
+});
+
+createDrizzleCrudAdapter({
+	database,
+	table: users,
+	columns: { id: users.id, name: users.name },
+	recordKeys: {
+		// @ts-expect-error returned-row keys are inferred from the table select model.
+		id: "userId",
+	},
+});
+
 // Compile-only proof that application-owned transactions and native row predicates stay typed.
 export const securedAdapter = createDrizzleCrudAdapter({
 	database,
@@ -66,7 +85,9 @@ export const snapshotSecuredAdapter = createDrizzleCrudAdapter({
 const nativeAdapter: CrudAdapter<
 	InferSelectModel<typeof users>,
 	InferInsertModel<typeof users>,
-	Partial<InferInsertModel<typeof users>>
+	Partial<InferInsertModel<typeof users>>,
+	keyof InferInsertModel<typeof users>,
+	"id" | "name"
 > = adapter;
 void nativeAdapter;
 
@@ -78,6 +99,20 @@ void adapter.update(
 	},
 	{ resource: "users", operation: "update" },
 );
+void adapter.findMany(
+	{
+		order: [
+			{
+				// @ts-expect-error query fields are inferred from the configured logical columns.
+				field: "email",
+				direction: "asc",
+			},
+		],
+		limit: 10,
+		count: false,
+	},
+	{ resource: "users", operation: "list" },
+);
 void adapter.create(
 	{
 		// @ts-expect-error Drizzle's inferred insert model requires a string name.
@@ -87,6 +122,7 @@ void adapter.create(
 );
 
 const resource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "drizzle-users",
 	path: "drizzle-users",
 	itemPath: ":id",
@@ -103,7 +139,6 @@ const resource = defineCrudResource({
 export const binding = bindDrizzleCrud({
 	resource,
 	adapter: { useValue: adapter },
-	fields: ["id", "name"],
 	mappings: {
 		create: (input) => ({ id: 1, name: input.name }),
 		update: (input) => (input.name === undefined ? {} : { name: input.name }),
@@ -115,10 +150,28 @@ export const binding = bindDrizzleCrud({
 export const invalidBinding = bindDrizzleCrud({
 	resource,
 	adapter: { useValue: adapter },
-	fields: ["id", "name"],
 	mappings: {
 		// @ts-expect-error binder mappings must return the table's inferred insert model.
 		create: () => ({ id: 1, name: 123 }),
+		update: (input) => (input.name === undefined ? {} : { name: input.name }),
+		persistence: () => ({}),
+		response: (record) => record,
+	},
+});
+
+const invalidLogicalFieldResource = defineCrudResource({
+	...resource,
+	fields: ["id", "name", "email"],
+	name: "invalid-drizzle-logical-field",
+	path: "invalid-drizzle-logical-field",
+});
+
+// @ts-expect-error every resource field must exist in the adapter's logical column map.
+bindDrizzleCrud({
+	resource: invalidLogicalFieldResource,
+	adapter: { useValue: adapter },
+	mappings: {
+		create: (input) => ({ id: 1, name: input.name }),
 		update: (input) => (input.name === undefined ? {} : { name: input.name }),
 		persistence: () => ({}),
 		response: (record) => record,
@@ -136,12 +189,21 @@ const scopedAdapter = createDrizzleCrudAdapter({
 	},
 });
 
+const scopedResource = defineCrudResource({
+	fields: ["id", "tenantId", "ownerId", "name"],
+	name: "scoped-drizzle-users",
+	path: "scoped-drizzle-users",
+	itemPath: ":id",
+	idFields: { id: "id" },
+	contracts: resource.contracts,
+	operations: crudOperations.all(),
+});
+
 // Scope-owned insert fields can be omitted by the API create mapper because persistence
 // supplies them after scope resolution and overwrites any mapper-provided values.
 export const scopedBinding = bindDrizzleCrud({
-	resource,
+	resource: scopedResource,
 	adapter: { useValue: scopedAdapter },
-	fields: ["id", "tenantId", "ownerId", "name"],
 	scopeCreateFields: ["tenantId", "ownerId"],
 	mappings: {
 		create: (input) => ({ id: 1, name: input.name }),
@@ -158,9 +220,8 @@ export const scopedBinding = bindDrizzleCrud({
 CrudModule.forFeature({ resources: [scopedBinding] });
 
 export const missingRequiredUnscopedField = bindDrizzleCrud({
-	resource,
+	resource: scopedResource,
 	adapter: { useValue: scopedAdapter },
-	fields: ["id", "tenantId", "ownerId", "name"],
 	mappings: {
 		// @ts-expect-error unscoped create mappings still require every required insert field.
 		create: (input) => ({ id: 1, name: input.name }),
@@ -171,9 +232,8 @@ export const missingRequiredUnscopedField = bindDrizzleCrud({
 });
 
 export const missingRequiredNonScopeField = bindDrizzleCrud({
-	resource,
+	resource: scopedResource,
 	adapter: { useValue: scopedAdapter },
-	fields: ["id", "tenantId", "ownerId", "name"],
 	scopeCreateFields: ["tenantId", "ownerId"],
 	mappings: {
 		// @ts-expect-error only declared scope fields become optional for the create mapper.
@@ -185,9 +245,8 @@ export const missingRequiredNonScopeField = bindDrizzleCrud({
 });
 
 export const invalidScopeCreateField = bindDrizzleCrud({
-	resource,
+	resource: scopedResource,
 	adapter: { useValue: scopedAdapter },
-	fields: ["id", "tenantId", "ownerId", "name"],
 	// @ts-expect-error scope-owned fields must be keys accepted by create and persistence mappings.
 	scopeCreateFields: ["notAColumn"],
 	mappings: {

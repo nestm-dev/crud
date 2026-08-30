@@ -10,6 +10,8 @@ import {
 	type CrudFindManyResult,
 	type CrudFindOneInput,
 	type CrudOrder,
+	type CrudPersistenceField,
+	type CrudPersistenceFieldTuple,
 	type CrudPredicate,
 	type CrudUpdateInput,
 	type CrudValues,
@@ -24,21 +26,29 @@ export type MemoryCrudUpdateRecord<RecordType, UpdateValues extends object = obj
 	record: RecordType,
 	values: UpdateValues,
 ) => RecordType;
-export type MemoryCrudGetField<RecordType> = (record: RecordType, field: string) => unknown;
+export type MemoryCrudField<RecordType> = RecordType extends object
+	? CrudPersistenceField<RecordType>
+	: string;
+
+export type MemoryCrudGetField<RecordType, Field extends string = MemoryCrudField<RecordType>> = (
+	record: RecordType,
+	field: Field,
+) => unknown;
 
 export interface MemoryCrudAdapterOptions<
 	RecordType,
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	Field extends string = MemoryCrudField<RecordType>,
 > {
 	readonly store?: MemoryCrudStore<RecordType>;
 	readonly initialRecords?: readonly RecordType[];
 	readonly clone?: MemoryCrudClone<RecordType>;
 	readonly createRecord?: MemoryCrudCreateRecord<RecordType, CreateValues>;
 	readonly updateRecord?: MemoryCrudUpdateRecord<RecordType, UpdateValues>;
-	readonly getField?: MemoryCrudGetField<RecordType>;
+	readonly getField?: MemoryCrudGetField<RecordType, Field>;
 	/** Logical field tuples that must remain unique. */
-	readonly unique?: readonly (readonly string[])[];
+	readonly unique?: readonly CrudPersistenceFieldTuple<Field>[];
 }
 
 interface MemoryTransaction<RecordType> {
@@ -193,10 +203,10 @@ function comparisonTruth(
 	}
 }
 
-function predicateTruth<RecordType>(
+function predicateTruth<RecordType, Field extends string>(
 	record: RecordType,
-	predicate: CrudPredicate,
-	getField: MemoryCrudGetField<RecordType>,
+	predicate: CrudPredicate<Field>,
+	getField: MemoryCrudGetField<RecordType, Field>,
 ): SqlTruth {
 	switch (predicate.kind) {
 		case "comparison":
@@ -233,10 +243,10 @@ function predicateTruth<RecordType>(
 	}
 }
 
-function predicateMatches<RecordType>(
+function predicateMatches<RecordType, Field extends string>(
 	record: RecordType,
-	predicate: CrudPredicate,
-	getField: MemoryCrudGetField<RecordType>,
+	predicate: CrudPredicate<Field>,
+	getField: MemoryCrudGetField<RecordType, Field>,
 ): boolean {
 	return predicateTruth(record, predicate, getField) === true;
 }
@@ -270,11 +280,11 @@ function stableValueString(value: unknown): string {
 	}
 }
 
-function compareRecords<RecordType>(
+function compareRecords<RecordType, Field extends string>(
 	left: RecordType,
 	right: RecordType,
-	order: readonly CrudOrder[],
-	getField: MemoryCrudGetField<RecordType>,
+	order: readonly CrudOrder<Field>[],
+	getField: MemoryCrudGetField<RecordType, Field>,
 ): number {
 	for (const item of order) {
 		const comparison = compareNullable(getField(left, item.field), getField(right, item.field));
@@ -290,7 +300,14 @@ export class MemoryCrudAdapter<
 	RecordType = CrudValues,
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
-> implements CrudAdapter<RecordType, CreateValues, UpdateValues> {
+	Field extends string = MemoryCrudField<RecordType>,
+> implements CrudAdapter<
+	RecordType,
+	CreateValues,
+	UpdateValues,
+	CrudPersistenceField<CreateValues>,
+	Field
+> {
 	readonly capabilities: CrudAdapterCapabilities = Object.freeze({
 		transactions: true,
 		returning: true,
@@ -301,13 +318,15 @@ export class MemoryCrudAdapter<
 	readonly store: MemoryCrudStore<RecordType>;
 	readonly #createRecord: MemoryCrudCreateRecord<RecordType, CreateValues>;
 	readonly #updateRecord: MemoryCrudUpdateRecord<RecordType, UpdateValues>;
-	readonly #getField: MemoryCrudGetField<RecordType>;
-	readonly #unique: readonly (readonly string[])[];
+	readonly #getField: MemoryCrudGetField<RecordType, Field>;
+	readonly #unique: readonly CrudPersistenceFieldTuple<Field>[];
 	readonly #sessionKey = Symbol("@nestm/crud-memory:session");
 	readonly #activeTransactions = new WeakSet<object>();
 	#writeTail: Promise<void> = Promise.resolve();
 
-	constructor(options: MemoryCrudAdapterOptions<RecordType, CreateValues, UpdateValues> = {}) {
+	constructor(
+		options: MemoryCrudAdapterOptions<RecordType, CreateValues, UpdateValues, Field> = {},
+	) {
 		if (
 			options.store !== undefined &&
 			(options.initialRecords !== undefined || options.clone !== undefined)
@@ -375,7 +394,10 @@ export class MemoryCrudAdapter<
 		});
 	}
 
-	async findOne(input: CrudFindOneInput, context: CrudAdapterContext): Promise<RecordType | null> {
+	async findOne(
+		input: CrudFindOneInput<Field>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null> {
 		const records = this.#recordsFor(context);
 		const matches = records.filter((record) =>
 			predicateMatches(record, input.predicate, this.#getField),
@@ -390,7 +412,7 @@ export class MemoryCrudAdapter<
 	}
 
 	async findMany(
-		input: CrudFindManyInput,
+		input: CrudFindManyInput<Field>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<RecordType>> {
 		const records = this.#recordsFor(context)
@@ -409,7 +431,7 @@ export class MemoryCrudAdapter<
 	}
 
 	async update(
-		input: CrudUpdateInput<UpdateValues>,
+		input: CrudUpdateInput<UpdateValues, Field>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null> {
 		const transaction = this.#optionalTransaction(context);
@@ -426,7 +448,10 @@ export class MemoryCrudAdapter<
 		});
 	}
 
-	async delete(input: CrudDeleteInput, context: CrudAdapterContext): Promise<RecordType | null> {
+	async delete(
+		input: CrudDeleteInput<Field>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null> {
 		const transaction = this.#optionalTransaction(context);
 		if (transaction !== undefined) {
 			return this.#deleteIn(transaction.records, input);
@@ -441,7 +466,7 @@ export class MemoryCrudAdapter<
 		});
 	}
 
-	getField(record: RecordType, field: string): unknown {
+	getField(record: RecordType, field: Field): unknown {
 		return this.#getField(record, field);
 	}
 
@@ -452,7 +477,7 @@ export class MemoryCrudAdapter<
 		return this.store.clone(created);
 	}
 
-	#updateIn(records: RecordType[], input: CrudUpdateInput<UpdateValues>): RecordType | null {
+	#updateIn(records: RecordType[], input: CrudUpdateInput<UpdateValues, Field>): RecordType | null {
 		const index = records.findIndex((record) =>
 			predicateMatches(record, input.predicate, this.#getField),
 		);
@@ -466,7 +491,7 @@ export class MemoryCrudAdapter<
 		return this.store.clone(updated);
 	}
 
-	#deleteIn(records: RecordType[], input: CrudDeleteInput): RecordType | null {
+	#deleteIn(records: RecordType[], input: CrudDeleteInput<Field>): RecordType | null {
 		const index = records.findIndex((record) =>
 			predicateMatches(record, input.predicate, this.#getField),
 		);

@@ -110,6 +110,7 @@ const RELATION_PARENT_TENANT = "relation-parents";
 const RELATION_CHILD_TENANT = "relation-children-visible";
 
 const scopedServiceResource = defineCrudResource({
+	fields: ["tenantId", "id", "name", "score", "category", "createdAt"],
 	name: "postgres-scoped-items",
 	path: "postgres/scoped-items",
 	itemPath: ":id",
@@ -141,6 +142,7 @@ const scopedServiceResource = defineCrudResource({
 });
 
 const relationChildResource = defineCrudResource({
+	fields: ["tenantId", "id", "name", "score", "category", "createdAt"],
 	name: "postgres-relation-children",
 	path: "postgres/relation-children",
 	itemPath: ":id",
@@ -156,6 +158,7 @@ const relationChildResource = defineCrudResource({
 });
 
 const relationParentResource = defineCrudResource({
+	fields: ["tenantId", "id", "name", "score", "category", "createdAt"],
 	name: "postgres-relation-parents",
 	path: "postgres/relation-parents",
 	itemPath: ":id",
@@ -192,15 +195,15 @@ function context(operation: CrudAdapterContext["operation"]): CrudAdapterContext
 	return { resource: "postgres-conformance", operation };
 }
 
-function comparison(
-	field: string,
-	operator: Extract<CrudPredicate, { kind: "comparison" }>["operator"],
+function comparison<const Field extends string>(
+	field: Field,
+	operator: Extract<CrudPredicate<Field>, { kind: "comparison" }>["operator"],
 	value: unknown,
-): CrudPredicate {
+): CrudPredicate<Field> {
 	return { kind: "comparison", field, operator, value };
 }
 
-function identity(tenantId: string, id: string): CrudPredicate {
+function identity(tenantId: string, id: string): CrudPredicate<"tenantId" | "id"> {
 	return {
 		kind: "and",
 		predicates: [comparison("tenantId", "eq", tenantId), comparison("id", "eq", id)],
@@ -483,7 +486,6 @@ function createScopedService(adapter: CrudAdapter<ItemRecord>) {
 	const binding = defineCrudBinding({
 		resource: scopedServiceResource,
 		adapter: { useValue: adapter },
-		fields: ["tenantId", "id", "name", "score", "category", "createdAt"],
 		mappings: {
 			create: (input) =>
 				record({
@@ -526,7 +528,6 @@ function createRelationServices(adapter: CrudAdapter<ItemRecord>) {
 	const childBinding = defineCrudBinding({
 		resource: relationChildResource,
 		adapter: { useValue: adapter },
-		fields: ["tenantId", "id", "name", "score", "category", "createdAt"],
 		mappings: {
 			create: (input) =>
 				record({
@@ -547,7 +548,6 @@ function createRelationServices(adapter: CrudAdapter<ItemRecord>) {
 	const parentBinding = defineCrudBinding({
 		resource: relationParentResource,
 		adapter: { useValue: adapter },
-		fields: ["tenantId", "id", "name", "score", "category", "createdAt"],
 		mappings: {
 			create: (input) =>
 				record({

@@ -1,7 +1,12 @@
 import { buildCrudCursorPredicate } from "../cursor/cursor-predicate.ts";
 import { decodeCrudCursor } from "../cursor/cursor.ts";
 import { CrudCursorError } from "../cursor/cursor.error.ts";
-import type { AnyCrudResource } from "../resource/resource.types.ts";
+import type {
+	AnyCrudResource,
+	CrudField,
+	CrudRelationName,
+	CrudRequiredField,
+} from "../resource/resource.types.ts";
 import { parseCrudSchema, type CrudSchemaSource } from "../schema/schema.types.ts";
 import { andCrudPredicates } from "./predicate.ts";
 import { resolveCrudPaginationModes } from "./pagination.ts";
@@ -38,8 +43,8 @@ interface NormalizedQuery {
 export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 	resource: Resource,
 	rawQuery: CrudRawQuery,
-	options: CrudQueryParserOptions = {},
-): Promise<CrudListQuery> {
+	options: CrudQueryParserOptions<CrudField<Resource>> = {},
+): Promise<CrudListQuery<CrudRequiredField<Resource>, CrudRelationName<Resource>>> {
 	const normalized = normalizeQuery(rawQuery);
 	const pagination = resolvePagination(resource, normalized, options);
 	const order = buildCrudOrder(resource, readOptionalString(normalized, "sort"), pagination.mode);
@@ -59,7 +64,10 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 			includes,
 			deleted,
 		};
-		return query;
+		return query as unknown as CrudOffsetQuery<
+			CrudRequiredField<Resource>,
+			CrudRelationName<Resource>
+		>;
 	}
 
 	let cursorPredicate: CrudPredicate | undefined;
@@ -100,15 +108,18 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 		includes,
 		deleted,
 	};
-	return query;
+	return query as unknown as CrudCursorQuery<
+		CrudRequiredField<Resource>,
+		CrudRelationName<Resource>
+	>;
 }
 
 /** Builds deterministic ordering and appends every mapped ID field as a tie-breaker. */
-export function buildCrudOrder(
-	resource: AnyCrudResource,
+export function buildCrudOrder<Resource extends AnyCrudResource>(
+	resource: Resource,
 	rawSort: string | undefined,
 	mode: "offset" | "cursor",
-): readonly CrudOrder[] {
+): readonly CrudOrder<CrudRequiredField<Resource>>[] {
 	const config = resource.query?.sort;
 	if (rawSort !== undefined && config === undefined) {
 		throw queryError("unknown_sort_field", "Sorting is not enabled for this resource.", "sort");
@@ -152,7 +163,7 @@ export function buildCrudOrder(
 			order.push({ field: idField, direction: "asc" });
 		}
 	}
-	return order;
+	return order as unknown as readonly CrudOrder<CrudRequiredField<Resource>>[];
 }
 
 async function parseFilters(

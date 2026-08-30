@@ -2,16 +2,22 @@ import { z } from "zod";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { ExecutionContext } from "@nestjs/common";
 
-import type { CrudAdapter } from "../src/adapter/adapter.types.ts";
-import { defineCrudBinding, type CrudResourceBinding } from "../src/adapter/binding.types.ts";
+import type { CrudAdapter, CrudUpsertInput } from "../src/adapter/adapter.types.ts";
+import {
+	defineCrudBinding,
+	type CrudBindingUpsertOptions,
+	type CrudResourceBinding,
+} from "../src/adapter/binding.types.ts";
 import { defineCrudFactoryProvider } from "../src/module/factory-provider.types.ts";
 import { defineCrudResource } from "../src/resource/define-resource.ts";
+import type { CrudPredicate, CrudQueryConfig } from "../src/query/query.types.ts";
 import { crudOperations, type CrudOperations } from "../src/resource/operations.ts";
 import { CrudModule, type CrudModuleAsyncOptions } from "../src/module/crud.module.ts";
 import { getCrudServiceToken, type CrudServiceToken } from "../src/module/crud.tokens.ts";
 import type {
 	AnyCrudResource,
 	CrudCreate,
+	CrudField,
 	CrudId,
 	CrudPathParams,
 	CrudResponse,
@@ -25,9 +31,11 @@ import type {
 	CrudScope,
 } from "../src/runtime/runtime.types.ts";
 import { defineCrudFact, provideCrudFact } from "../src/runtime/crud-facts.ts";
+import type { CrudAdapterConformanceFixture } from "../src/testing/conformance.ts";
 import { FakeCrudAdapter } from "./support/fake-crud-adapter.ts";
 
 export const typedResource = defineCrudResource({
+	fields: ["tenantId", "id", "label", "count", "ownerId"],
 	name: "typed-records",
 	path: "typed-records",
 	itemPath: ":tenantId/:id",
@@ -45,6 +53,81 @@ export const typedResource = defineCrudResource({
 	},
 	operations: crudOperations.all(),
 });
+
+export type FieldInference = Assert<
+	Equal<CrudField<typeof typedResource>, "tenantId" | "id" | "label" | "count" | "ownerId">
+>;
+
+type ConformanceRecord = { readonly id: string; readonly label: string };
+export type ConformanceFieldInference = Assert<
+	Equal<CrudAdapterConformanceFixture<ConformanceRecord>["idField"], "id" | "label">
+>;
+// @ts-expect-error conformance field names must be keys of the record by default.
+const invalidConformanceField: CrudAdapterConformanceFixture<ConformanceRecord>["sortField"] =
+	"missing";
+void invalidConformanceField;
+
+const invalidIdFieldResource = defineCrudResource({
+	...typedResource,
+	name: "invalid-id-field",
+	path: "invalid-id-field",
+	// @ts-expect-error ID mappings must use the resource's logical field vocabulary.
+	idFields: {
+		tenantId: "tenant_id",
+		id: "id",
+	},
+});
+
+const invalidSoftDeleteFieldResource = defineCrudResource({
+	...typedResource,
+	name: "invalid-soft-delete-field",
+	path: "invalid-soft-delete-field",
+	softDelete: {
+		// @ts-expect-error soft-delete fields must be declared by the resource.
+		field: "deletedAt",
+	},
+});
+
+const invalidResourceQueryField = defineCrudResource({
+	...typedResource,
+	name: "invalid-query-field",
+	path: "invalid-query-field",
+	query: {
+		sort: {
+			// @ts-expect-error resource query fields use the declared logical vocabulary.
+			fields: ["missing"],
+		},
+	},
+});
+
+void invalidIdFieldResource;
+void invalidSoftDeleteFieldResource;
+void invalidResourceQueryField;
+
+export const typedQueryConfig = {
+	filters: {
+		label: { schema: z.string(), operators: ["eq", "contains"] },
+	},
+	sort: { fields: ["id", "label"], default: ["-label"], cursor: ["id"] },
+	search: { fields: ["label"] },
+} as const satisfies CrudQueryConfig<"id" | "label">;
+
+export const invalidTypedQueryConfig = {
+	sort: {
+		fields: [
+			// @ts-expect-error configured query fields use the declared logical vocabulary.
+			"missing",
+		],
+	},
+} as const satisfies CrudQueryConfig<"id" | "label">;
+
+export const invalidTypedPredicate: CrudPredicate<"id" | "label"> = {
+	kind: "comparison",
+	// @ts-expect-error neutral predicates preserve their logical field vocabulary.
+	field: "missing",
+	operator: "eq",
+	value: 1,
+};
 
 export const idempotentDeleteOperations: CrudOperations = {
 	delete: { missing: "ignore" },
@@ -78,6 +161,7 @@ export type ErasedPathParamsInference = Assert<
 >;
 
 export const nestedTypedResource = defineCrudResource({
+	fields: ["parentId", "childId", "label", "enabled"],
 	name: "typed-children",
 	path: "parents/:parentId/children",
 	itemPath: ":childId",
@@ -95,6 +179,84 @@ export const nestedTypedResource = defineCrudResource({
 	},
 	operations: crudOperations.only("create", "list", "read", "upsert"),
 });
+
+const typedRelationResource = defineCrudResource({
+	...typedResource,
+	name: "typed-relation-resource",
+	path: "typed-relation-resource",
+	relations: {
+		children: {
+			type: "hasMany",
+			target: () => nestedTypedResource,
+			local: ["id"],
+			foreign: ["childId"],
+		},
+	},
+});
+
+const invalidRelationTargetFieldDefinition = {
+	...typedResource,
+	name: "invalid-relation-target-field",
+	path: "invalid-relation-target-field",
+	relations: {
+		children: {
+			type: "hasMany",
+			target: () => nestedTypedResource,
+			local: ["id"],
+			foreign: ["missing"],
+		},
+	},
+} as const;
+const invalidRelationTargetFieldResource = defineCrudResource(
+	// @ts-expect-error relation foreign keys must exist on the target resource.
+	invalidRelationTargetFieldDefinition,
+);
+
+const mismatchedRelationTupleDefinition = {
+	...typedResource,
+	name: "mismatched-relation-tuples",
+	path: "mismatched-relation-tuples",
+	relations: {
+		children: {
+			type: "hasMany",
+			target: () => nestedTypedResource,
+			local: ["tenantId", "id"],
+			foreign: ["childId"],
+		},
+	},
+} as const;
+const mismatchedRelationTupleResource = defineCrudResource(
+	// @ts-expect-error relation key tuples must have the same length.
+	mismatchedRelationTupleDefinition,
+);
+
+const invalidSortSelectionDefinition = {
+	...typedResource,
+	name: "invalid-sort-selection",
+	path: "invalid-sort-selection",
+	query: { sort: { fields: ["id"], default: ["label"] } },
+} as const;
+const invalidSortSelectionResource = defineCrudResource(
+	// @ts-expect-error default sort fields must be enabled by sort.fields.
+	invalidSortSelectionDefinition,
+);
+
+const duplicateFieldDefinition = {
+	...typedResource,
+	name: "duplicate-field-vocabulary",
+	path: "duplicate-field-vocabulary",
+	fields: [...typedResource.fields, "id"],
+} as const;
+const duplicateFieldResource = defineCrudResource(
+	// @ts-expect-error the authoritative logical field vocabulary cannot contain duplicates.
+	duplicateFieldDefinition,
+);
+
+void invalidRelationTargetFieldResource;
+void typedRelationResource;
+void mismatchedRelationTupleResource;
+void invalidSortSelectionResource;
+void duplicateFieldResource;
 
 export type NestedPathParamsInference = Assert<
 	Equal<CrudPathParams<typeof nestedTypedResource>, { parentId: string }>
@@ -145,6 +307,27 @@ export const typedHook: CrudLifecycleHook<typeof typedResource> = {
 	beforeUpdate: (input) => ({ ...input, label: input.label?.trim() }),
 };
 
+export const invalidPredicateScope: CrudScope<typeof typedResource> = {
+	resolve: () => ({
+		predicate: {
+			kind: "comparison",
+			// @ts-expect-error scope predicates use the resource's logical field vocabulary.
+			field: "missing",
+			operator: "eq",
+			value: 1,
+		},
+	}),
+};
+
+export const invalidCreateValuesScope: CrudScope<typeof typedResource> = {
+	resolve: () => ({
+		createValues: {
+			// @ts-expect-error scope values are keyed by declared logical fields.
+			missing: "value",
+		},
+	}),
+};
+
 interface AuthorizedParent {
 	readonly id: string;
 	readonly organizationId: string | null;
@@ -190,7 +373,6 @@ export const typedValidator: CrudMutationValidator<typeof typedResource> = {
 export const typedBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: new FakeCrudAdapter() },
-	fields: ["tenantId", "id", "label", "count"],
 	mappings: {
 		create: (input) => input,
 		update: (input) => input,
@@ -220,6 +402,29 @@ interface NativeUpdateValues {
 	readonly deleted_at?: Date | null;
 }
 
+export const nativeUpsertOptions = {
+	conflictFields: ["tenant_id"],
+	overwriteFields: ["display_label", "total_count"],
+} as const satisfies CrudBindingUpsertOptions<keyof NativeCreateValues>;
+
+export const invalidNativeUpsertOptions = {
+	conflictFields: [
+		// @ts-expect-error conflict fields must be keys of the adapter create values.
+		"tenantId",
+	],
+	overwriteFields: ["display_label"],
+} as const satisfies CrudBindingUpsertOptions<keyof NativeCreateValues>;
+
+export const invalidNativeUpsertInput: CrudUpsertInput<NativeCreateValues> = {
+	conflictFields: ["tenant_id"],
+	predicate: { kind: "and", predicates: [] },
+	values: { tenant_id: "tenant", display_label: "Typed", total_count: 1 },
+	overwriteFields: [
+		// @ts-expect-error adapter upsert inputs preserve the persistence field vocabulary.
+		"label",
+	],
+};
+
 declare const nativeAdapter: CrudAdapter<NativeRecord, NativeCreateValues, NativeUpdateValues>;
 
 interface ImmutableScopeRecord {
@@ -247,7 +452,6 @@ declare const immutableScopeAdapter: CrudAdapter<
 export const immutableScopeBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: immutableScopeAdapter },
-	fields: ["tenantId", "id", "label", "count"],
 	scopeCreateFields: ["owner_id"],
 	mappings: {
 		create: (input) => ({ display_label: input.label }),
@@ -267,7 +471,6 @@ export const immutableScopeBinding = defineCrudBinding({
 export const persistenceTypedBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: nativeAdapter },
-	fields: ["tenantId", "id", "label", "count"],
 	mappings: {
 		create: (input) => ({
 			tenant_id: "tenant",
@@ -299,7 +502,6 @@ export type PersistenceUpdateInference = Assert<
 export const invalidPersistenceCreateBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: nativeAdapter },
-	fields: ["tenantId", "id", "label", "count"],
 	mappings: {
 		// @ts-expect-error mapped creates must contain every required native create value.
 		create: (input) => ({ display_label: input.label, total_count: input.count }),
@@ -317,7 +519,6 @@ export const invalidPersistenceCreateBinding = defineCrudBinding({
 export const invalidPersistenceUpdateBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: nativeAdapter },
-	fields: ["tenantId", "id", "label", "count"],
 	mappings: {
 		create: (input) => ({
 			tenant_id: "tenant",
@@ -339,7 +540,6 @@ export const invalidPersistenceUpdateBinding = defineCrudBinding({
 export const invalidFrameworkPersistenceBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: nativeAdapter },
-	fields: ["tenantId", "id", "label", "count"],
 	mappings: {
 		create: (input) => ({
 			tenant_id: "tenant",
@@ -377,7 +577,6 @@ export type AdapterFactoryDependencyInference = Assert<
 export const factoryBackedBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: typedAdapterFactory,
-	fields: ["tenantId", "id", "label", "count"],
 	mappings: {
 		create: (input) => input,
 		update: (input) => input,
@@ -489,25 +688,29 @@ const unexpectedPathParamsDefinition = {
 // @ts-expect-error flat collection paths cannot declare pathParams.
 const unexpectedPathParamsResource = defineCrudResource(unexpectedPathParamsDefinition);
 
-// @ts-expect-error pathParams contract keys must exactly match its field mappings.
-const mismatchedPathParamsContractResource = defineCrudResource({
+const mismatchedPathParamsContractDefinition = {
 	...nestedTypedResource,
 	name: "mismatched-parent-contract",
 	pathParams: {
 		contract: z.object({ organizationId: z.string().uuid() }),
 		fields: { parentId: "parentId" },
 	},
-});
+} as const;
+const mismatchedPathParamsContractResource = defineCrudResource(
+	// @ts-expect-error pathParams contract keys must exactly match its field mappings.
+	mismatchedPathParamsContractDefinition,
+);
 
-// @ts-expect-error every path parameter must be required in the pathParams contract output.
-const optionalPathParamResource = defineCrudResource({
+const optionalPathParamDefinition = {
 	...nestedTypedResource,
 	name: "optional-parent-param",
 	pathParams: {
 		contract: z.object({ parentId: z.string().uuid().optional() }),
 		fields: { parentId: "parentId" },
 	},
-});
+} as const;
+// @ts-expect-error every path parameter must be required in the pathParams contract output.
+const optionalPathParamResource = defineCrudResource(optionalPathParamDefinition);
 
 // @ts-expect-error parent and item route parameter names must be disjoint.
 const overlappingPathParamResource = defineCrudResource({
@@ -537,10 +740,10 @@ const duplicatePathParamDefinition = {
 // @ts-expect-error parent route parameter names must be unique.
 const duplicatePathParamResource = defineCrudResource(duplicatePathParamDefinition);
 
-// @ts-expect-error parent mappings must be identical in pathParams.fields and idFields.
 const mismatchedPathParamMappingResource = defineCrudResource({
 	...nestedTypedResource,
 	name: "mismatched-parent-mapping",
+	// @ts-expect-error parent mappings must be identical in pathParams.fields and idFields.
 	idFields: { parentId: "ownerId", childId: "childId" },
 });
 
@@ -579,26 +782,12 @@ export const invalidCreate: CrudCreate<typeof typedResource> = { label: "wrong",
 export const invalidBinding = defineCrudBinding({
 	resource: typedResource,
 	adapter: { useValue: new FakeCrudAdapter() },
-	fields: ["tenantId", "id", "label", "count"],
 	mappings: {
 		create: (input) => input,
 		update: (input) => input,
 		persistence: (values) => values,
 		// @ts-expect-error response mapping must satisfy the inferred response input.
 		response: () => ({ tenantId: "tenant", id: "wrong", label: "typed", count: 1 }),
-	},
-});
-
-// @ts-expect-error every composite ID field must be declared by the binding.
-export const incompleteFieldBinding = defineCrudBinding({
-	resource: typedResource,
-	adapter: { useValue: new FakeCrudAdapter() },
-	fields: ["id", "label", "count"],
-	mappings: {
-		create: (input) => input,
-		update: (input) => input,
-		persistence: (values) => values,
-		response: () => ({ tenantId: "tenant", id: 1, label: "typed", count: 1 }),
 	},
 });
 
@@ -615,23 +804,11 @@ type ServiceTokenResource<Token> =
 	Token extends CrudServiceToken<infer Resource> ? Resource : never;
 
 type BindingCreateValues<Binding> =
-	Binding extends CrudResourceBinding<
-		AnyCrudResource,
-		unknown,
-		readonly string[],
-		infer CreateValues,
-		object
-	>
+	Binding extends CrudResourceBinding<AnyCrudResource, unknown, infer CreateValues, object>
 		? CreateValues
 		: never;
 
 type BindingUpdateValues<Binding> =
-	Binding extends CrudResourceBinding<
-		AnyCrudResource,
-		unknown,
-		readonly string[],
-		object,
-		infer UpdateValues
-	>
+	Binding extends CrudResourceBinding<AnyCrudResource, unknown, object, infer UpdateValues>
 		? UpdateValues
 		: never;

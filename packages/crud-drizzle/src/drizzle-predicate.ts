@@ -19,11 +19,19 @@ import {
 	sql,
 	type SQL,
 } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import type { AnyPgColumn, AnyPgTable } from "drizzle-orm/pg-core";
 
-export type DrizzleCrudColumns = Readonly<Record<string, AnyPgColumn>>;
+export type DrizzleCrudTableColumn<Table extends AnyPgTable> =
+	Table["_"]["columns"][keyof Table["_"]["columns"]];
 
-function columnFor(columns: DrizzleCrudColumns, field: string): AnyPgColumn {
+export type DrizzleCrudColumns<Table extends AnyPgTable = AnyPgTable> = Readonly<
+	Record<string, DrizzleCrudTableColumn<Table>>
+>;
+
+function columnFor<Columns extends DrizzleCrudColumns>(
+	columns: Columns,
+	field: Extract<keyof Columns, string>,
+): AnyPgColumn {
 	const column = columns[field];
 	if (column === undefined) {
 		throw new TypeError(`The Drizzle adapter does not map CRUD field '${field}'.`);
@@ -41,9 +49,12 @@ function escapeLike(value: string): string {
 	return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
-function comparison(
-	predicate: Extract<CrudPredicate, { kind: "comparison" }>,
-	columns: DrizzleCrudColumns,
+function comparison<Columns extends DrizzleCrudColumns>(
+	predicate: Extract<
+		CrudPredicate<NoInfer<Extract<keyof Columns, string>>>,
+		{ kind: "comparison" }
+	>,
+	columns: Columns,
 ): SQL {
 	const column = columnFor(columns, predicate.field);
 	const value = predicate.value;
@@ -96,9 +107,9 @@ function comparison(
 }
 
 /** Compiles a neutral CRUD predicate into Drizzle's parameterized SQL expression tree. */
-export function compileDrizzlePredicate(
-	predicate: CrudPredicate,
-	columns: DrizzleCrudColumns,
+export function compileDrizzlePredicate<const Columns extends DrizzleCrudColumns>(
+	predicate: CrudPredicate<NoInfer<Extract<keyof Columns, string>>>,
+	columns: Columns,
 ): SQL {
 	switch (predicate.kind) {
 		case "comparison":

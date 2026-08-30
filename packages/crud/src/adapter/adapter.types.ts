@@ -5,6 +5,20 @@ import type { CrudOrder, CrudPredicate } from "../query/query.types.ts";
 
 export type CrudValues = Readonly<Record<string, unknown>>;
 
+/** String property names exposed by a statically known persistence value shape. */
+type CrudKnownPersistenceField<Values extends object> = Values extends unknown
+	? Extract<keyof Values, string>
+	: never;
+
+export type CrudPersistenceField<Values extends object> = [
+	CrudKnownPersistenceField<Values>,
+] extends [never]
+	? string
+	: CrudKnownPersistenceField<Values>;
+
+/** A readonly tuple containing at least one persistence field. */
+export type CrudPersistenceFieldTuple<Field extends string = string> = readonly [Field, ...Field[]];
+
 export interface CrudAdapterCapabilities {
 	readonly transactions: boolean;
 	readonly returning: boolean;
@@ -28,14 +42,14 @@ export interface CrudAdapterContext {
 	readonly pathParams?: CrudValues;
 }
 
-export interface CrudFindOneInput {
-	readonly predicate: CrudPredicate;
-	readonly order?: readonly CrudOrder[];
+export interface CrudFindOneInput<QueryField extends string = string> {
+	readonly predicate: CrudPredicate<QueryField>;
+	readonly order?: readonly CrudOrder<QueryField>[];
 }
 
-export interface CrudFindManyInput {
-	readonly predicate?: CrudPredicate;
-	readonly order: readonly CrudOrder[];
+export interface CrudFindManyInput<QueryField extends string = string> {
+	readonly predicate?: CrudPredicate<QueryField>;
+	readonly order: readonly CrudOrder<QueryField>[];
 	readonly offset?: number;
 	readonly limit: number;
 	readonly count: boolean;
@@ -50,30 +64,39 @@ export interface CrudCreateInput<CreateValues extends object = CrudValues> {
 	readonly values: CreateValues;
 }
 
-export interface CrudUpdateInput<UpdateValues extends object = CrudValues> {
-	readonly predicate: CrudPredicate;
+export interface CrudUpdateInput<
+	UpdateValues extends object = CrudValues,
+	QueryField extends string = string,
+> {
+	readonly predicate: CrudPredicate<QueryField>;
 	readonly values: UpdateValues;
 }
 
-export interface CrudUpsertInput<CreateValues extends object = CrudValues> {
+export interface CrudUpsertInput<
+	CreateValues extends object = CrudValues,
+	PersistenceField extends string = CrudPersistenceField<CreateValues>,
+	QueryField extends string = string,
+> {
 	/** Complete, non-empty adapter persistence paths forming the conflict target. */
-	readonly conflictFields: readonly [string, ...string[]];
+	readonly conflictFields: CrudPersistenceFieldTuple<PersistenceField>;
 	/** Predicate that must still match when the conflict branch updates an existing row. */
-	readonly predicate: CrudPredicate;
+	readonly predicate: CrudPredicate<QueryField>;
 	/** One proposed insert row. Conflict updates copy only `overwriteFields` from this row. */
 	readonly values: CreateValues;
 	/** Non-empty adapter persistence paths copied from the proposed row on conflict. */
-	readonly overwriteFields: readonly [string, ...string[]];
+	readonly overwriteFields: CrudPersistenceFieldTuple<PersistenceField>;
 }
 
-export interface CrudDeleteInput {
-	readonly predicate: CrudPredicate;
+export interface CrudDeleteInput<QueryField extends string = string> {
+	readonly predicate: CrudPredicate<QueryField>;
 }
 
 export interface CrudAdapter<
 	RecordType = unknown,
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	PersistenceField extends string = CrudPersistenceField<CreateValues>,
+	QueryField extends string = string,
 > {
 	readonly capabilities: CrudAdapterCapabilities;
 	/**
@@ -87,13 +110,16 @@ export interface CrudAdapter<
 		context: CrudAdapterContext,
 	): Promise<Result>;
 	create(input: CrudCreateInput<CreateValues>, context: CrudAdapterContext): Promise<RecordType>;
-	findOne(input: CrudFindOneInput, context: CrudAdapterContext): Promise<RecordType | null>;
+	findOne(
+		input: CrudFindOneInput<QueryField>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null>;
 	findMany(
-		input: CrudFindManyInput,
+		input: CrudFindManyInput<QueryField>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<RecordType>>;
 	update(
-		input: CrudUpdateInput<UpdateValues>,
+		input: CrudUpdateInput<UpdateValues, QueryField>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null>;
 	/**
@@ -103,22 +129,39 @@ export interface CrudAdapter<
 	 * the conflict-update statement and return `null` when an existing row is not visible.
 	 */
 	upsert?(
-		input: CrudUpsertInput<CreateValues>,
+		input: CrudUpsertInput<CreateValues, PersistenceField, QueryField>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null>;
-	delete(input: CrudDeleteInput, context: CrudAdapterContext): Promise<RecordType | null>;
-	getField(record: RecordType, field: string): unknown;
+	delete(
+		input: CrudDeleteInput<QueryField>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null>;
+	getField(record: RecordType, field: QueryField): unknown;
 }
+
+/** Logical query/order field vocabulary exposed by an adapter type. */
+export type CrudAdapterQueryField<Adapter> =
+	Adapter extends CrudAdapter<
+		infer _RecordType,
+		infer _CreateValues extends object,
+		infer _UpdateValues extends object,
+		infer _PersistenceField extends string,
+		infer QueryField extends string
+	>
+		? QueryField
+		: never;
 
 /** Adapter refinement for implementations certified for the atomic upsert contract. */
 export interface CrudUpsertAdapter<
 	RecordType = unknown,
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
-> extends CrudAdapter<RecordType, CreateValues, UpdateValues> {
+	PersistenceField extends string = CrudPersistenceField<CreateValues>,
+	QueryField extends string = string,
+> extends CrudAdapter<RecordType, CreateValues, UpdateValues, PersistenceField, QueryField> {
 	readonly capabilities: CrudAdapterCapabilities & { readonly upsert: true };
 	upsert(
-		input: CrudUpsertInput<CreateValues>,
+		input: CrudUpsertInput<CreateValues, PersistenceField, QueryField>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null>;
 }
@@ -127,6 +170,8 @@ export type CrudAdapterFactory<
 	RecordType = unknown,
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
+	PersistenceField extends string = CrudPersistenceField<CreateValues>,
+	QueryField extends string = string,
 > = () =>
-	| CrudAdapter<RecordType, CreateValues, UpdateValues>
-	| Promise<CrudAdapter<RecordType, CreateValues, UpdateValues>>;
+	| CrudAdapter<RecordType, CreateValues, UpdateValues, PersistenceField, QueryField>
+	| Promise<CrudAdapter<RecordType, CreateValues, UpdateValues, PersistenceField, QueryField>>;

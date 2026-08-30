@@ -15,8 +15,13 @@ import type { CrudRelationConfig } from "../relation/relation.types.ts";
 
 const PARAMETER_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-export function defineCrudResource<const Definition extends CrudResourceDefinition>(
-	definition: Definition & CrudResourceDefinitionConstraint<NoInfer<Definition>>,
+export function defineCrudResource<
+	const Fields extends readonly [string, ...string[]],
+	const Definition extends CrudResourceDefinition,
+>(
+	definition: { readonly fields: Fields } & Definition &
+		CrudResourceDefinition<string, string, NoInfer<Fields>> &
+		CrudResourceDefinitionConstraint<NoInfer<Definition>>,
 ): DefinedCrudResource<Definition> {
 	assertResourceDefinition(definition);
 	return Object.freeze({
@@ -105,11 +110,19 @@ function assertResourceDefinition(definition: CrudResourceDefinition): void {
 			`CRUD resource "${definition.name}" cannot enable upsert without contracts.upsert.`,
 		);
 	}
+	if (!Array.isArray(definition.fields) || definition.fields.length === 0) {
+		throw new TypeError(`CRUD resource "${definition.name}" must declare logical fields.`);
+	}
+	for (const field of definition.fields) {
+		assertNonEmptyString(definition.name, "fields", field);
+	}
+	assertUnique(definition.name, "fields", definition.fields);
 	if (!isRecord(definition.idFields) || Object.keys(definition.idFields).length === 0) {
 		throw new TypeError(`CRUD resource "${definition.name}" must declare idFields.`);
 	}
 	for (const field of Object.values(definition.idFields)) {
 		assertNonEmptyString(definition.name, "idFields", field);
+		assertDeclaredField(definition, "idFields", field);
 	}
 
 	assertPathParamsConfiguration(definition, pathRouteParams);
@@ -134,6 +147,7 @@ function assertResourceDefinition(definition: CrudResourceDefinition): void {
 	}
 	if (definition.softDelete !== undefined) {
 		assertNonEmptyString(definition.name, "softDelete.field", definition.softDelete.field);
+		assertDeclaredField(definition, "softDelete.field", definition.softDelete.field);
 	}
 	assertQueryConfiguration(definition);
 	assertRelationConfiguration(definition);
@@ -167,6 +181,7 @@ function snapshotResourceDefinition<Definition extends CrudResourceDefinition>(
 				) as Definition["relations"]);
 	return {
 		...definition,
+		fields: Object.freeze([...definition.fields]),
 		idFields: Object.freeze({ ...definition.idFields }),
 		...(definition.pathParams === undefined
 			? {}
@@ -279,12 +294,12 @@ function snapshotSoftDelete(config: CrudSoftDeleteConfig): CrudSoftDeleteConfig 
 	});
 }
 
-function snapshotRelation(relation: CrudRelationConfig): CrudRelationConfig {
+function snapshotRelation<const Relation extends CrudRelationConfig>(relation: Relation): Relation {
 	return Object.freeze({
 		...relation,
 		local: Object.freeze([...relation.local]),
 		foreign: Object.freeze([...relation.foreign]),
-	});
+	}) as Relation;
 }
 
 function assertCanonicalRoutePath(resource: string, label: string, path: string): string[] {
@@ -344,6 +359,7 @@ function assertPathParamsConfiguration(
 	const mappedFields: string[] = [];
 	for (const field of Object.values(fields)) {
 		assertNonEmptyString(definition.name, "pathParams.fields", field);
+		assertDeclaredField(definition, "pathParams.fields", field);
 		mappedFields.push(field);
 	}
 	assertUnique(definition.name, "pathParams.fields mappings", mappedFields);
@@ -360,6 +376,7 @@ function assertQueryConfiguration(definition: CrudResourceDefinition): void {
 	const name = definition.name;
 	for (const [field, config] of Object.entries(definition.query?.filters ?? {})) {
 		assertNonEmptyString(name, `filter field`, field);
+		assertDeclaredField(definition, "query.filters", field);
 		assertSchemaSource(name, `query.filters.${field}.schema`, config.schema);
 		if (config.operators.length === 0) {
 			throw new TypeError(`CRUD resource "${name}" filter "${field}" must enable an operator.`);
@@ -377,6 +394,7 @@ function assertQueryConfiguration(definition: CrudResourceDefinition): void {
 	const sort = definition.query?.sort;
 	if (sort !== undefined) {
 		assertStringList(name, "sort.fields", sort.fields);
+		for (const field of sort.fields) assertDeclaredField(definition, "query.sort.fields", field);
 		assertUnique(name, "sort.fields", sort.fields);
 		const fields = new Set(sort.fields);
 		assertSortList(name, "sort.default", sort.default ?? [], fields);
@@ -429,6 +447,9 @@ function assertQueryConfiguration(definition: CrudResourceDefinition): void {
 	const search = definition.query?.search;
 	if (search !== undefined) {
 		assertStringList(name, "search.fields", search.fields);
+		for (const field of search.fields) {
+			assertDeclaredField(definition, "query.search.fields", field);
+		}
 		assertUnique(name, "search.fields", search.fields);
 		if (search.fields.length === 0) {
 			throw new TypeError(`CRUD resource "${name}" search.fields cannot be empty.`);
@@ -464,6 +485,9 @@ function assertRelationConfiguration(definition: CrudResourceDefinition): void {
 		assertStringList(definition.name, `relation "${relationName}" local`, relation.local);
 		assertStringList(definition.name, `relation "${relationName}" foreign`, relation.foreign);
 		assertUnique(definition.name, `relation "${relationName}" local`, relation.local);
+		for (const field of relation.local) {
+			assertDeclaredField(definition, `relation "${relationName}" local`, field);
+		}
 		assertUnique(definition.name, `relation "${relationName}" foreign`, relation.foreign);
 		assertOptionalPositiveInteger(
 			definition.name,
@@ -480,6 +504,18 @@ function assertRelationConfiguration(definition: CrudResourceDefinition): void {
 				`CRUD resource "${definition.name}" relation "${relationName}" can only set maxItems for hasMany.`,
 			);
 		}
+	}
+}
+
+function assertDeclaredField(
+	definition: CrudResourceDefinition,
+	label: string,
+	field: string,
+): void {
+	if (!definition.fields.includes(field)) {
+		throw new TypeError(
+			`CRUD resource "${definition.name}" ${label} references undeclared field "${field}".`,
+		);
 	}
 }
 

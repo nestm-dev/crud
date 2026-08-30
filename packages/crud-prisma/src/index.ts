@@ -7,7 +7,11 @@ export {
 	createPrismaCrudAdapter,
 	PrismaCrudAdapter,
 	type PrismaCrudCreateValues,
+	type PrismaCrudLogicalField,
+	type PrismaCrudModelField,
+	type PrismaCrudRecordField,
 	type PrismaCrudUpdateValues,
+	type PrismaCrudWhereUnique,
 	type PrismaCrudAdapterOptions,
 } from "./prisma-adapter.ts";
 export {

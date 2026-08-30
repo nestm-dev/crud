@@ -3,6 +3,7 @@ export {
 	MemoryCrudAdapter,
 	type MemoryCrudAdapterOptions,
 	type MemoryCrudCreateRecord,
+	type MemoryCrudField,
 	type MemoryCrudGetField,
 	type MemoryCrudUpdateRecord,
 } from "./memory-crud-adapter.ts";

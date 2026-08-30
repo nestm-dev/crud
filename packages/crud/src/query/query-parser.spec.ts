@@ -13,6 +13,7 @@ const SECRET = "a production-length cursor secret with 32+ bytes";
 const codec = new HmacSha256CrudCursorCodec(SECRET);
 
 const userResource = defineCrudResource({
+	fields: ["id", "name", "age", "createdAt", "deletedAt"],
 	name: "users",
 	path: "users",
 	itemPath: ":id",
@@ -57,6 +58,7 @@ const userResource = defineCrudResource({
 });
 
 const membershipResource = defineCrudResource({
+	fields: ["tenant_id", "id", "createdAt"],
 	name: "memberships",
 	path: "memberships",
 	itemPath: ":tenantId/:id",

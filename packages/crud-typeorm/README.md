@@ -25,7 +25,6 @@ const usersAdapter = createTypeOrmCrudAdapter({
 
 const usersBinding = bindTypeOrmCrud({
 	resource: users,
-	fields: ["id", "email", "createdAt"],
 	adapter: { useValue: usersAdapter },
 	mappings: {
 		create: (input) => input,
@@ -50,7 +49,7 @@ columns: {
 This modern object form also defines the hydrated selection. Set `select: false`
 to keep a column available to predicates without reading it. Legacy string maps
 remain full-entity mappings unless `select` or `exclude` is also configured. It
-must cover every field listed by the binding. Define `mappings.persistence` when scopes or soft
+must cover every field listed by the resource. Define `mappings.persistence` when scopes or soft
 delete generate logical values outside create/update input mappings; it may be
 omitted when those generated values are always empty. CRUD removes explicitly
 undefined optional mapper properties before invoking the adapter.

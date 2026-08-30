@@ -8,6 +8,7 @@ import type {
 	CrudFindManyInput,
 	CrudFindManyResult,
 	CrudFindOneInput,
+	CrudPersistenceField,
 	CrudUpdateInput,
 	CrudValues,
 } from "@nestm/crud/adapter";
@@ -52,19 +53,47 @@ export type PrismaCrudUpdateValues<Delegate> = PersistenceValuesOrDefault<
 	ObjectArgumentProperty<MethodArgument<Delegate, "update">, "data">
 >;
 
-export interface PrismaCrudAdapterOptions<RecordType, Client, Delegate> {
+/** Native unique selector accepted by a generated Prisma model delegate. */
+export type PrismaCrudWhereUnique<Delegate> = PersistenceValuesOrDefault<
+	ObjectArgumentProperty<MethodArgument<Delegate, "update">, "where">
+>;
+
+export type PrismaCrudRecordField<RecordType> = RecordType extends object
+	? CrudPersistenceField<RecordType>
+	: string;
+
+export type PrismaCrudModelField<RecordType, Delegate> = RecordType extends object
+	? CrudPersistenceField<
+			RecordType & PrismaCrudCreateValues<Delegate> & PrismaCrudUpdateValues<Delegate>
+		>
+	: CrudPersistenceField<PrismaCrudCreateValues<Delegate> & PrismaCrudUpdateValues<Delegate>>;
+
+export type PrismaCrudLogicalField<RecordType, Fields extends PrismaCrudFields> =
+	| PrismaCrudRecordField<RecordType>
+	| (string extends Extract<keyof Fields, string> ? never : Extract<keyof Fields, string>);
+
+export interface PrismaCrudAdapterOptions<
+	RecordType,
+	Client,
+	Delegate,
+	Fields extends PrismaCrudFields<PrismaCrudModelField<RecordType, Delegate>> = PrismaCrudFields<
+		PrismaCrudModelField<RecordType, Delegate>
+	>,
+> {
 	/** A generated PrismaClient owned and lifecycle-managed by the consuming application. */
 	readonly client: Client;
 	/** Selects a generated model delegate, for example `(client) => client.user`. */
 	readonly delegate: (client: Client) => Delegate;
 	/** Returns the model's native `WhereUniqueInput`, including named compound selectors. */
-	readonly identity: (record: RecordType) => Readonly<Record<string, unknown>>;
+	readonly identity: (record: RecordType) => Readonly<PrismaCrudWhereUnique<Delegate>>;
 	/** Maps public logical field names to Prisma model field names. */
-	readonly fields?: PrismaCrudFields;
+	readonly fields?: Fields;
 	/** Maps logical fields to keys in returned records; defaults to `fields[field]` or `field`. */
-	readonly recordKeys?: Readonly<Record<string, string>>;
+	readonly recordKeys?: Readonly<
+		Partial<Record<PrismaCrudLogicalField<RecordType, Fields>, PrismaCrudRecordField<RecordType>>>
+	>;
 	/** Logical fields whose Prisma model columns are required (used to compile `isnull` safely). */
-	readonly nonNullableFields?: readonly string[];
+	readonly nonNullableFields?: readonly PrismaCrudLogicalField<RecordType, Fields>[];
 }
 
 interface PrismaTransactionHost {
@@ -145,7 +174,16 @@ export class PrismaCrudAdapter<
 	Delegate,
 	CreateValues extends object = PrismaCrudCreateValues<Delegate>,
 	UpdateValues extends object = PrismaCrudUpdateValues<Delegate>,
-> implements CrudAdapter<RecordType, CreateValues, UpdateValues> {
+	Fields extends PrismaCrudFields<PrismaCrudModelField<RecordType, Delegate>> = PrismaCrudFields<
+		PrismaCrudModelField<RecordType, Delegate>
+	>,
+> implements CrudAdapter<
+	RecordType,
+	CreateValues,
+	UpdateValues,
+	CrudPersistenceField<CreateValues>,
+	PrismaCrudLogicalField<RecordType, Fields>
+> {
 	readonly capabilities = Object.freeze({
 		transactions: true,
 		returning: true,
@@ -157,12 +195,12 @@ export class PrismaCrudAdapter<
 	readonly #delegateFactory: (client: Client) => Delegate;
 	readonly #identity: (record: RecordType) => Readonly<Record<string, unknown>>;
 	readonly #fields: PrismaCrudFields;
-	readonly #recordKeys: Readonly<Record<string, string>>;
+	readonly #recordKeys: Readonly<Partial<Record<string, string>>>;
 	readonly #nonNullableFields: ReadonlySet<string>;
 	readonly #sessionMarker = Symbol("@nestm/crud-prisma:session");
 	readonly #activeSessions = new WeakSet<object>();
 
-	constructor(options: PrismaCrudAdapterOptions<RecordType, Client, Delegate>) {
+	constructor(options: PrismaCrudAdapterOptions<RecordType, Client, Delegate, Fields>) {
 		if (
 			typeof options.client !== "object" ||
 			options.client === null ||
@@ -220,7 +258,10 @@ export class PrismaCrudAdapter<
 		}
 	}
 
-	async findOne(input: CrudFindOneInput, context: CrudAdapterContext): Promise<RecordType | null> {
+	async findOne(
+		input: CrudFindOneInput<PrismaCrudLogicalField<RecordType, Fields>>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null> {
 		try {
 			return await this.#delegate(context).findFirst({
 				where: compilePrismaPredicate(input.predicate, this.#fields, this.#nonNullableFields),
@@ -234,7 +275,7 @@ export class PrismaCrudAdapter<
 	}
 
 	async findMany(
-		input: CrudFindManyInput,
+		input: CrudFindManyInput<PrismaCrudLogicalField<RecordType, Fields>>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<RecordType>> {
 		try {
@@ -259,7 +300,7 @@ export class PrismaCrudAdapter<
 	}
 
 	async update(
-		input: CrudUpdateInput<UpdateValues>,
+		input: CrudUpdateInput<UpdateValues, PrismaCrudLogicalField<RecordType, Fields>>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null> {
 		try {
@@ -281,7 +322,10 @@ export class PrismaCrudAdapter<
 		}
 	}
 
-	async delete(input: CrudDeleteInput, context: CrudAdapterContext): Promise<RecordType | null> {
+	async delete(
+		input: CrudDeleteInput<PrismaCrudLogicalField<RecordType, Fields>>,
+		context: CrudAdapterContext,
+	): Promise<RecordType | null> {
 		try {
 			const delegate = this.#delegate(context);
 			const predicate = compilePrismaPredicate(
@@ -300,7 +344,7 @@ export class PrismaCrudAdapter<
 		}
 	}
 
-	getField(record: RecordType, field: string): unknown {
+	getField(record: RecordType, field: PrismaCrudLogicalField<RecordType, Fields>): unknown {
 		if (typeof record !== "object" || record === null) return undefined;
 		const key = this.#recordKeys[field] ?? this.#fields[field] ?? field;
 		return (record as Readonly<Record<string, unknown>>)[key];
@@ -339,8 +383,10 @@ export function createPrismaCrudAdapter<
 	Delegate,
 	CreateValues extends object = PrismaCrudCreateValues<Delegate>,
 	UpdateValues extends object = PrismaCrudUpdateValues<Delegate>,
+	const Fields extends PrismaCrudFields<PrismaCrudModelField<RecordType, Delegate>> =
+		PrismaCrudFields<PrismaCrudModelField<RecordType, Delegate>>,
 >(
-	options: PrismaCrudAdapterOptions<RecordType, Client, Delegate>,
-): PrismaCrudAdapter<RecordType, Client, Delegate, CreateValues, UpdateValues> {
+	options: PrismaCrudAdapterOptions<RecordType, Client, Delegate, Fields>,
+): PrismaCrudAdapter<RecordType, Client, Delegate, CreateValues, UpdateValues, Fields> {
 	return new PrismaCrudAdapter(options);
 }

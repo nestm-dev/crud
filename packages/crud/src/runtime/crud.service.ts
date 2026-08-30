@@ -31,8 +31,11 @@ import type { CrudRelationConfig } from "../relation/relation.types.ts";
 import type {
 	AnyCrudResource,
 	CrudCreate,
+	CrudField,
+	CrudFieldValues,
 	CrudId,
 	CrudPathParams,
+	CrudRelationName,
 	CrudResponseInput,
 	CrudUpdate,
 	CrudUpsert,
@@ -82,7 +85,10 @@ interface RelationReadResult<RecordType> {
 	readonly responses: readonly unknown[];
 }
 
-interface ResolvedCrudScope extends Omit<CrudScopeResult, "facts"> {
+interface ResolvedCrudScope<Resource extends AnyCrudResource> extends Omit<
+	CrudScopeResult<Resource>,
+	"facts"
+> {
 	readonly facts: CrudFacts;
 }
 
@@ -104,7 +110,6 @@ export class CrudService<
 		readonly binding: CrudResourceBinding<
 			Resource,
 			RecordType,
-			readonly string[],
 			CreateValues,
 			UpdateValues,
 			ScopeCreateField
@@ -276,7 +281,7 @@ export class CrudService<
 	async read(
 		id: CrudId<Resource>,
 		executionContext?: ExecutionContext,
-		includes: readonly string[] = [],
+		includes: readonly CrudRelationName<Resource>[] = [],
 	): Promise<CrudResponseInput<Resource>> {
 		const pathParams = this.pathParamsFromId(id);
 		return this.runAdapter(() =>
@@ -854,11 +859,13 @@ export class CrudService<
 		}
 	}
 
-	private async resolveScopes(context: CrudOperationContext<Resource>): Promise<ResolvedCrudScope> {
+	private async resolveScopes(
+		context: CrudOperationContext<Resource>,
+	): Promise<ResolvedCrudScope<Resource>> {
 		const resolved = await Promise.all(this.scopes.map(async (scope) => scope.resolve(context)));
 		const predicate = andCrudPredicates(...resolved.map((result) => result.predicate));
-		const createValues: Record<string, unknown> = {};
-		const updateValues: Record<string, unknown> = {};
+		const createValues: Partial<Record<CrudField<Resource>, unknown>> = {};
+		const updateValues: Partial<Record<CrudField<Resource>, unknown>> = {};
 		const factEntries: CrudFactEntry[] = [];
 		for (const result of resolved) {
 			if (result.createValues !== undefined) Object.assign(createValues, result.createValues);
@@ -937,9 +944,9 @@ export class CrudService<
 	}
 
 	private scopeCreateValues(
-		scope: Pick<ResolvedCrudScope, "createValues">,
+		scope: Pick<ResolvedCrudScope<Resource>, "createValues">,
 		pathParams: CrudPathParams<Resource> | undefined,
-	): Readonly<Record<string, unknown>> {
+	): CrudFieldValues<Resource> {
 		const values: Record<string, unknown> = { ...scope.createValues };
 		for (const { field, value } of this.pathFixedValues(pathParams)) {
 			if (Object.hasOwn(values, field) && !persistenceValuesEqual(values[field], value)) {
@@ -949,7 +956,7 @@ export class CrudService<
 			}
 			values[field] = value;
 		}
-		return values;
+		return values as CrudFieldValues<Resource>;
 	}
 
 	private async mapPersistenceValues(values: CrudValues): Promise<UpdateValues> {
@@ -959,7 +966,7 @@ export class CrudService<
 			);
 		}
 		return normalizeCrudMappingValues<UpdateValues>(
-			await this.binding.mappings.persistence(values),
+			await this.binding.mappings.persistence(values as CrudFieldValues<Resource>),
 		);
 	}
 
@@ -971,13 +978,13 @@ export class CrudService<
 			);
 		}
 		return normalizeCrudMappingValues<UpdateValues>(
-			await this.binding.mappings.persistence(values),
+			await this.binding.mappings.persistence(values as CrudFieldValues<Resource>),
 		);
 	}
 
 	private async mapScopeCreateValues(values: CrudValues): Promise<object> {
 		if (this.binding.mappings.scopeCreate !== undefined) {
-			return this.binding.mappings.scopeCreate(values);
+			return this.binding.mappings.scopeCreate(values as CrudFieldValues<Resource>);
 		}
 		const fields = this.binding.scopeCreateFields;
 		if (fields === undefined || fields.length === 0) {
@@ -1102,7 +1109,7 @@ export class CrudService<
 				`CRUD resource "${this.resource.name}" pagination.maxLimit must be >= defaultLimit.`,
 			);
 		}
-		const fields = new Set(this.binding.fields);
+		const fields = new Set(this.resource.fields);
 		const required = new Set(Object.values(this.resource.idFields));
 		if (this.resource.softDelete !== undefined) required.add(this.resource.softDelete.field);
 		for (const field of Object.keys(this.resource.query?.filters ?? {})) required.add(field);
@@ -1172,7 +1179,10 @@ export class CrudService<
 						`CRUD binding for "${this.resource.name}" cannot overwrite conflict field "${field}".`,
 					);
 				}
-				if (this.binding.scopeCreateFields?.includes(field) === true) {
+				if (
+					this.binding.scopeCreateFields?.some((scopeField: string) => scopeField === field) ===
+					true
+				) {
 					throw new TypeError(
 						`CRUD binding for "${this.resource.name}" cannot overwrite scope-owned create field "${field}".`,
 					);

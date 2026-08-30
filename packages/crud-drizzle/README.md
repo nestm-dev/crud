@@ -26,7 +26,6 @@ const usersAdapter = createDrizzleCrudAdapter({
 
 const usersBinding = bindDrizzleCrud({
 	resource: users,
-	fields: ["id", "email", "createdAt"],
 	adapter: { useValue: usersAdapter },
 	mappings: {
 		create: (input) => input,
@@ -51,7 +50,6 @@ receives its complete inferred insert model:
 const documentsBinding = bindDrizzleCrud({
 	resource: documentsResource,
 	adapter: { useValue: documentsAdapter },
-	fields: ["id", "organizationId", "ownerId", "title"],
 	scopeCreateFields: ["organizationId", "ownerId"],
 	mappings: {
 		create: (input) => ({ title: input.title }),

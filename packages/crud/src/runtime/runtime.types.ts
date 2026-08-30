@@ -1,10 +1,12 @@
 import type { ExecutionContext } from "@nestjs/common";
 
-import type { CrudAdapterSession, CrudValues } from "../adapter/adapter.types.ts";
+import type { CrudAdapterSession } from "../adapter/adapter.types.ts";
 import type { CrudPredicate } from "../query/query.types.ts";
 import type {
 	AnyCrudResource,
 	CrudCreate,
+	CrudField,
+	CrudFieldValues,
 	CrudId,
 	CrudPathParams,
 	CrudResponseInput,
@@ -156,21 +158,26 @@ export interface CrudMutationEvent<Resource extends AnyCrudResource = AnyCrudRes
 	readonly pathParams?: CrudPathParams<Resource>;
 }
 
-export interface CrudScopeResult {
-	readonly predicate?: CrudPredicate;
+export type CrudScopeValues<Resource extends AnyCrudResource = AnyCrudResource> =
+	CrudFieldValues<Resource>;
+
+export interface CrudScopeResult<Resource extends AnyCrudResource = AnyCrudResource> {
+	readonly predicate?: CrudPredicate<CrudField<Resource>>;
 	/** Logical persistence values applied only while creating a record. */
-	readonly createValues?: CrudValues;
+	readonly createValues?: CrudScopeValues<Resource>;
 	/**
 	 * Logical persistence values applied only to an explicit update operation.
 	 * Unlike `createValues`, these values may overwrite API-mapped update fields.
 	 */
-	readonly updateValues?: CrudValues;
+	readonly updateValues?: CrudScopeValues<Resource>;
 	/** Typed values made available to hooks and mutation validators in this transaction. */
 	readonly facts?: readonly CrudFactEntry[];
 }
 
 export interface CrudScope<Resource extends AnyCrudResource = AnyCrudResource> {
-	resolve(context: CrudOperationContext<Resource>): CrudScopeResult | Promise<CrudScopeResult>;
+	resolve(
+		context: CrudOperationContext<Resource>,
+	): CrudScopeResult<Resource> | Promise<CrudScopeResult<Resource>>;
 }
 
 export interface CrudAfterCommitErrorContext<Resource extends AnyCrudResource = AnyCrudResource> {

@@ -25,11 +25,19 @@ interface UserUpdateValues {
 	readonly tenantId?: string | { readonly set: string };
 }
 
+interface UserWhereUnique {
+	readonly id?: number;
+	readonly tenantId_name?: {
+		readonly tenantId: string;
+		readonly name: string;
+	};
+}
+
 interface UserDelegate {
 	create<Arguments extends { readonly data: UserCreateValues }>(
 		arguments_: Arguments,
 	): PromiseLike<UserRecord>;
-	update<Arguments extends { readonly where: object; readonly data: UserUpdateValues }>(
+	update<Arguments extends { readonly where: UserWhereUnique; readonly data: UserUpdateValues }>(
 		arguments_: Arguments,
 	): PromiseLike<UserRecord>;
 }
@@ -54,12 +62,61 @@ export const adapter = createPrismaCrudAdapter<UserRecord, Client, UserDelegate>
 	identity: (record) => ({ id: record.id }),
 });
 
-const nativeAdapter: CrudAdapter<UserRecord, UserCreateValues, UserUpdateValues> = adapter;
+createPrismaCrudAdapter<UserRecord, Client, UserDelegate>({
+	client,
+	delegate: (owner) => owner.user,
+	identity: (record) => ({ id: record.id }),
+	fields: {
+		// @ts-expect-error Prisma field mappings must target model fields.
+		displayName: "email",
+	},
+});
+
+createPrismaCrudAdapter<UserRecord, Client, UserDelegate>({
+	client,
+	delegate: (owner) => owner.user,
+	identity: (record) => ({ id: record.id }),
+	fields: { displayName: "name" },
+	recordKeys: {
+		// @ts-expect-error record key mappings must target returned-record keys.
+		displayName: "displayName",
+	},
+});
+
+createPrismaCrudAdapter<UserRecord, Client, UserDelegate>({
+	client,
+	delegate: (owner) => owner.user,
+	// @ts-expect-error identity must return the delegate's native unique selector.
+	identity: () => ({ email: "ada@example.com" }),
+});
+
+const nativeAdapter: CrudAdapter<
+	UserRecord,
+	UserCreateValues,
+	UserUpdateValues,
+	keyof UserCreateValues,
+	keyof UserRecord
+> = adapter;
 void nativeAdapter;
 
 void adapter.create(
 	{ values: { name: "Ada", tenantId: "tenant" } },
 	{ resource: "users", operation: "create" },
+);
+void adapter.findMany(
+	{
+		predicate: {
+			kind: "comparison",
+			// @ts-expect-error query fields are inferred from the Prisma record shape.
+			field: "email",
+			operator: "eq",
+			value: "ada@example.com",
+		},
+		order: [],
+		limit: 10,
+		count: false,
+	},
+	{ resource: "users", operation: "list" },
 );
 void adapter.create(
 	{
@@ -70,6 +127,7 @@ void adapter.create(
 );
 
 const resource = defineCrudResource({
+	fields: ["id", "name", "tenantId"],
 	name: "prisma-users",
 	path: "prisma-users",
 	itemPath: ":id",
@@ -86,7 +144,6 @@ const resource = defineCrudResource({
 export const binding = bindPrismaCrud({
 	resource,
 	adapter: { useValue: adapter },
-	fields: ["id", "name", "tenantId"],
 	mappings: {
 		create: (input) => ({ name: input.name, tenantId: "tenant" }),
 		update: (input) => (input.name === undefined ? {} : { name: input.name }),
@@ -99,10 +156,28 @@ export const binding = bindPrismaCrud({
 export const invalidBinding = bindPrismaCrud({
 	resource,
 	adapter: { useValue: adapter },
-	fields: ["id", "name", "tenantId"],
 	mappings: {
 		// @ts-expect-error binder mappings must return the delegate's create data type.
 		create: () => ({ name: 123, tenantId: "tenant" }),
+		update: (input) => (input.name === undefined ? {} : { name: input.name }),
+		persistence: () => ({}),
+		response: (record) => ({ id: record.id, name: record.name }),
+	},
+});
+
+const invalidLogicalFieldResource = defineCrudResource({
+	...resource,
+	fields: ["id", "name", "tenantId", "email"],
+	name: "invalid-prisma-logical-field",
+	path: "invalid-prisma-logical-field",
+});
+
+// @ts-expect-error every resource field must exist in the adapter's logical field map.
+bindPrismaCrud({
+	resource: invalidLogicalFieldResource,
+	adapter: { useValue: adapter },
+	mappings: {
+		create: (input) => ({ name: input.name, tenantId: "tenant" }),
 		update: (input) => (input.name === undefined ? {} : { name: input.name }),
 		persistence: () => ({}),
 		response: (record) => ({ id: record.id, name: record.name }),

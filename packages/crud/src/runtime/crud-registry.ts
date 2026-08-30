@@ -95,14 +95,14 @@ export class CrudRegistry implements OnApplicationBootstrap {
 					);
 				}
 				for (const field of relation.local) {
-					if (!binding.fields.includes(field)) {
+					if (!binding.resource.fields.includes(field)) {
 						throw new TypeError(
 							`CRUD relation "${resource.name}.${name}" has unmapped local field "${field}".`,
 						);
 					}
 				}
 				for (const field of relation.foreign) {
-					if (!targetEntry.binding.fields.includes(field)) {
+					if (!targetEntry.binding.resource.fields.includes(field)) {
 						throw new TypeError(
 							`CRUD relation "${resource.name}.${name}" has unmapped target field "${field}".`,
 						);

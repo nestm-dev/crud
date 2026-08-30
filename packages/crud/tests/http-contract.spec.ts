@@ -18,6 +18,7 @@ const platforms = [
 ] as const;
 
 const idempotentDeleteResource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "http-idempotent-records",
 	path: "api/idempotent-records",
 	itemPath: ":id",
@@ -36,7 +37,6 @@ function idempotentDeleteBinding() {
 	return defineCrudBinding({
 		resource: idempotentDeleteResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "name"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
