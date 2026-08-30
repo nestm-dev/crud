@@ -62,6 +62,7 @@ const consumerOperationDecorator: MethodDecorator = (_target, _propertyKey, desc
 };
 
 const resource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "consumer-items",
 	path: "/api/consumer-items/",
 	itemPath: ":id",
@@ -88,14 +89,12 @@ const resource = defineCrudResource({
 	version: "1",
 });
 
-const binding = bindMemoryCrud<typeof resource, Item, readonly ["id", "name"], Item, UpdateItem>({
+const binding = bindMemoryCrud<typeof resource, Item, Item, UpdateItem>({
 	resource,
-	fields: ["id", "name"],
 	initialRecords: [{ id: 1, name: "packed artifact" }],
 	mappings: {
 		create: (input) => input,
 		update: (input) => input,
-		persistence: (values) => values,
 		response: (record) => record,
 	},
 });

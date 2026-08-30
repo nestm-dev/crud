@@ -1,6 +1,7 @@
 export {
 	bindTypeOrmCrud,
 	type BindTypeOrmCrudOptions,
+	type TypeOrmCrudAdapterLogicalField,
 	type TypeOrmCrudAdapterProvider,
 } from "./bind-typeorm-crud.ts";
 export {
@@ -18,6 +19,7 @@ export {
 	type TypeOrmCrudConfiguredRecord,
 	type TypeOrmCrudCreateValues,
 	type TypeOrmCrudEffectiveTransaction,
+	type TypeOrmCrudLogicalField,
 	type TypeOrmCrudOperationTransactionOptions,
 	type TypeOrmCrudPropertyPath,
 	type TypeOrmCrudRowPredicate,

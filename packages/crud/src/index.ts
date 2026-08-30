@@ -29,7 +29,11 @@ export type {
 	AnyCrudResource,
 	CrudContracts,
 	CrudCreate,
+	CrudField,
+	CrudFieldTuple,
+	CrudFieldValues,
 	CrudRequiredField,
+	CrudRelationName,
 	DefinedCrudResource,
 	CrudHookType,
 	CrudId,
@@ -62,6 +66,7 @@ export type {
 	CrudProjection,
 	CrudScope,
 	CrudScopeResult,
+	CrudScopeValues,
 	CrudValidationContext,
 } from "./runtime/runtime.types.ts";
 export { defineCrudFact, provideCrudFact } from "./runtime/crud-facts.ts";
@@ -97,6 +102,7 @@ export type {
 	CrudRawQuery,
 	CrudSearchConfig,
 	CrudSortConfig,
+	CrudSortExpression,
 	CrudSortDirection,
 } from "./query/query.types.ts";
 

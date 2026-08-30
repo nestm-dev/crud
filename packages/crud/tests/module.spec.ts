@@ -41,6 +41,7 @@ describe("CrudModule", () => {
 
 		const afterCreate = vi.fn();
 		const resource = defineCrudResource({
+			fields: ["id", "name"],
 			name: "di-projected-records",
 			path: "di-projected-records",
 			itemPath: ":id",
@@ -62,7 +63,6 @@ describe("CrudModule", () => {
 		const binding = defineCrudBinding({
 			resource,
 			adapter: { useValue: adapter },
-			fields: ["id", "name"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,
@@ -144,6 +144,7 @@ describe("CrudModule", () => {
 		const adapter = new FakeCrudAdapter();
 		const binding = createUserBinding(adapter);
 		const collidingResource = defineCrudResource({
+			fields: ["id", "name"],
 			name: "legacy-users",
 			path: userResource.path,
 			itemPath: userResource.itemPath,
@@ -159,7 +160,6 @@ describe("CrudModule", () => {
 		const collidingBinding = defineCrudBinding({
 			resource: collidingResource,
 			adapter: { useValue: new FakeCrudAdapter() },
-			fields: ["id", "name"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,

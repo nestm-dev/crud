@@ -12,7 +12,6 @@ import { bindMemoryCrud } from "@nestm/crud-memory";
 
 const usersBinding = bindMemoryCrud({
 	resource: usersResource,
-	fields: ["id", "name"],
 	initialRecords: [{ id: "1", name: "Ada" }],
 	unique: [["id"]],
 	mappings: {
@@ -37,8 +36,8 @@ Like the SQL binders, `bindMemoryCrud` accepts `scopeCreateFields` plus
 `mappings.scopeCreate`. Use them for required insert fields owned by a nested
 collection path or application scope rather than the request body.
 
-`fields` names are logical API fields used by filters, ordering, IDs, scopes,
-soft deletion, and relations. For non-object records, provide `createRecord`,
+The resource's `fields` names are logical API fields used by filters, ordering,
+IDs, scopes, soft deletion, and relations. For non-object records, provide `createRecord`,
 `updateRecord`, and `getField`. Declare `unique` logical-field tuples to exercise
 the same `409` conflict path used by SQL unique constraints.
 

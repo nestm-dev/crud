@@ -2,7 +2,9 @@ import type { CrudOrder, CrudPredicate } from "@nestm/crud/adapter";
 
 export type PrismaCrudWhere = Readonly<Record<string, unknown>>;
 export type PrismaCrudOrderBy = Readonly<Record<string, "asc" | "desc">>;
-export type PrismaCrudFields = Readonly<Record<string, string>>;
+export type PrismaCrudFields<PersistenceField extends string = string> = Readonly<
+	Record<string, PersistenceField>
+>;
 
 function fieldFor(fields: PrismaCrudFields, field: string): string {
 	const persistenceField = fields[field] ?? field;

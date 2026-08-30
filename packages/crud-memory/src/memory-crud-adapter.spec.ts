@@ -34,7 +34,11 @@ function context(session?: CrudAdapterSession): CrudAdapterContext {
 	};
 }
 
-function comparison(field: string, operator: CrudFilterOperator, value: unknown): CrudPredicate {
+function comparison<const Field extends string>(
+	field: Field,
+	operator: CrudFilterOperator,
+	value: unknown,
+): CrudPredicate<Field> {
 	return { kind: "comparison", field, operator, value };
 }
 
@@ -137,7 +141,7 @@ describe("MemoryCrudAdapter", () => {
 
 	it("supports the complete predicate AST and filter operator surface", async () => {
 		const adapter = new MemoryCrudAdapter<UserRecord>({ initialRecords: initialUsers });
-		const cases: readonly [CrudPredicate, readonly number[]][] = [
+		const cases: readonly [CrudPredicate<keyof UserRecord>, readonly number[]][] = [
 			[comparison("age", "eq", 36), [1, 3]],
 			[comparison("age", "ne", 36), [2]],
 			[comparison("age", "gt", 28), [1, 3]],
@@ -181,7 +185,7 @@ describe("MemoryCrudAdapter", () => {
 
 	it("uses SQL three-valued logic for nullable comparisons and boolean predicates", async () => {
 		const adapter = new MemoryCrudAdapter<UserRecord>({ initialRecords: initialUsers });
-		const cases: readonly [CrudPredicate, readonly number[]][] = [
+		const cases: readonly [CrudPredicate<keyof UserRecord>, readonly number[]][] = [
 			[comparison("teamId", "eq", null), [2]],
 			[comparison("teamId", "ne", null), [1, 3]],
 			[comparison("teamId", "ne", 10), [3]],
@@ -302,7 +306,6 @@ describe("bindMemoryCrud", () => {
 	it("creates a convenient owned adapter with seeded records", () => {
 		const binding = bindMemoryCrud({
 			resource,
-			fields: ["id", "name", "age", "teamId"],
 			initialRecords: initialUsers,
 			mappings,
 		});
@@ -320,7 +323,6 @@ describe("bindMemoryCrud", () => {
 		const token = Symbol("custom-memory-adapter");
 		const binding = bindMemoryCrud({
 			resource,
-			fields: ["id", "name", "age", "teamId"],
 			mappings,
 			adapter: { useExisting: token },
 			// These would be an invalid owned-adapter combination, proving the override is lazy.

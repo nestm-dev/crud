@@ -15,6 +15,7 @@ import type { CrudEnhancers, CrudOperations } from "./operations.ts";
 export const CRUD_RESOURCE = Symbol.for("@nestm/crud:resource");
 
 export type CrudVersion = string | typeof VERSION_NEUTRAL | Array<string | typeof VERSION_NEUTRAL>;
+export type CrudFieldTuple<Field extends string = string> = readonly [Field, ...Field[]];
 
 export interface CrudContracts<
 	Id extends CrudSchemaSource = CrudSchemaSource,
@@ -32,23 +33,36 @@ export interface CrudContracts<
 
 export interface CrudPathParamsConfig<
 	Contract extends CrudSchemaSource = CrudSchemaSource,
-	Fields extends Readonly<Record<string, string>> = Readonly<Record<string, string>>,
+	Field extends string = string,
+	Fields extends Readonly<Record<string, Field>> = Readonly<Record<string, Field>>,
 > {
 	readonly contract: Contract;
 	readonly fields: Fields;
 }
 
-export interface CrudSoftDeleteConfig {
-	readonly field: string;
+export interface CrudSoftDeleteConfig<Field extends string = string> {
+	readonly field: Field;
 	readonly allowQueryDeleted?: boolean;
 	readonly queryDeletedEnhancers?: CrudEnhancers;
 	readonly deleteValue?: (context: CrudOperationContext) => unknown;
 	readonly restoreValue?: (context: CrudOperationContext) => unknown;
 }
 
+type CrudTypedRelations<
+	Fields extends CrudFieldTuple,
+	Relations extends Readonly<Record<string, CrudRelationConfig>>,
+> = {
+	readonly [Name in keyof Relations]: Relations[Name] extends {
+		readonly target: () => infer Target extends AnyCrudResource;
+	}
+		? CrudRelationConfig<NoInfer<Fields[number]>, Target>
+		: never;
+};
+
 export interface CrudResourceDefinition<
 	Name extends string = string,
 	Path extends string = string,
+	Fields extends CrudFieldTuple = CrudFieldTuple,
 	Id extends CrudSchemaSource = CrudSchemaSource,
 	Create extends CrudSchemaSource = CrudSchemaSource,
 	Update extends CrudSchemaSource = CrudSchemaSource,
@@ -62,13 +76,17 @@ export interface CrudResourceDefinition<
 	readonly name: Name;
 	readonly path: Path;
 	readonly itemPath: string;
-	readonly idFields: Readonly<Record<string, string>>;
-	readonly pathParams?: PathParams;
+	/** Complete logical field vocabulary used by this resource and its adapter binding. */
+	readonly fields: Fields;
+	readonly idFields: Readonly<Record<string, NoInfer<Fields[number]>>>;
+	readonly pathParams?: PathParams & {
+		readonly fields: Readonly<Record<string, NoInfer<Fields[number]>>>;
+	};
 	readonly contracts: CrudContracts<Id, Create, Update, Response, Upsert>;
 	readonly operations: CrudOperations;
-	readonly query?: CrudQueryConfig;
-	readonly softDelete?: CrudSoftDeleteConfig;
-	readonly relations?: Relations;
+	readonly query?: CrudQueryConfig<NoInfer<Fields[number]>>;
+	readonly softDelete?: CrudSoftDeleteConfig<NoInfer<Fields[number]>>;
+	readonly relations?: Relations & CrudTypedRelations<Fields, Relations>;
 	readonly hooks?: readonly InjectionToken<CrudLifecycleHook>[];
 	/** Transaction-bound mutation validators, executed in declaration order after before hooks. */
 	readonly validators?: readonly InjectionToken<CrudMutationValidator>[];
@@ -87,6 +105,7 @@ export interface CrudResourceDefinition<
 export interface CrudResource<
 	Name extends string = string,
 	Path extends string = string,
+	Fields extends CrudFieldTuple = CrudFieldTuple,
 	Id extends CrudSchemaSource = CrudSchemaSource,
 	Create extends CrudSchemaSource = CrudSchemaSource,
 	Update extends CrudSchemaSource = CrudSchemaSource,
@@ -99,6 +118,7 @@ export interface CrudResource<
 > extends CrudResourceDefinition<
 	Name,
 	Path,
+	Fields,
 	Id,
 	Create,
 	Update,
@@ -255,6 +275,27 @@ type HasDuplicateValues<Values extends readonly unknown[], Seen = never> = Value
 		: HasDuplicateValues<Rest, Seen | Value>
 	: false;
 
+type CrudFieldVocabularyConstraint<Definition extends CrudResourceDefinition> =
+	HasDuplicateValues<Definition["fields"]> extends true
+		? CrudResourceTypeError<"fields must contain unique logical field names">
+		: unknown;
+
+type CrudRelationTupleConstraint<Definition extends CrudResourceDefinition> = Definition extends {
+	readonly relations: infer Relations extends Readonly<Record<string, CrudRelationConfig>>;
+}
+	? false extends {
+			[
+				Name in keyof Relations
+			]: Relations[Name]["local"]["length"] extends Relations[Name]["foreign"]["length"]
+				? Relations[Name]["foreign"]["length"] extends Relations[Name]["local"]["length"]
+					? true
+					: false
+				: false;
+		}[keyof Relations]
+		? CrudResourceTypeError<"relation local and foreign tuples must have the same length">
+		: unknown
+	: unknown;
+
 type MappedFieldTuple<
 	Parameters extends readonly string[],
 	Fields extends Readonly<Record<string, string>>,
@@ -347,34 +388,36 @@ type CrudPathParamTypesConstraint<
 		: never;
 
 type CrudPathParamsObjectConstraint<
-	Definition extends CrudResourceDefinition,
+	Definition,
 	Config extends CrudPathParamsConfig,
 	Output extends object,
-> = [Output] extends [readonly unknown[]]
-	? CrudResourceTypeError<"pathParams.contract must output a parameter object, not an array">
-	: string extends keyof Output
-		? CrudResourceTypeError<"pathParams.contract must output an object with finite parameter keys">
-		: OptionalKeys<Output> extends never
-			? SameKeys<keyof Output, keyof Config["fields"]> extends true
-				? string extends Definition["path"]
-					? unknown
-					: SameKeys<PathParameters<Definition["path"]>, keyof Config["fields"]> extends true
-						? HasDuplicateValues<
-								MappedFieldTuple<PathParameterTuple<Definition["path"]>, Config["fields"]>
-							> extends true
-							? CrudResourceTypeError<"pathParams.fields must map to unique fields">
-							: false extends {
-										[
-											Parameter in keyof Config["fields"]
-										]: Parameter extends keyof Definition["idFields"]
-											? SameValue<Config["fields"][Parameter], Definition["idFields"][Parameter]>
-											: false;
-								  }[keyof Config["fields"]]
-								? CrudResourceTypeError<"pathParams.fields must match parent idFields mappings">
-								: CrudPathParamTypesConstraint<Definition, Config, Output>
-						: CrudResourceTypeError<"path parameters must match pathParams.fields keys">
-				: CrudResourceTypeError<"pathParams.contract output keys must match pathParams.fields keys">
-			: CrudResourceTypeError<"pathParams.contract output parameters must all be required">;
+> = Definition extends CrudResourceDefinition
+	? [Output] extends [readonly unknown[]]
+		? CrudResourceTypeError<"pathParams.contract must output a parameter object, not an array">
+		: string extends keyof Output
+			? CrudResourceTypeError<"pathParams.contract must output an object with finite parameter keys">
+			: OptionalKeys<Output> extends never
+				? SameKeys<keyof Output, keyof Config["fields"]> extends true
+					? string extends Definition["path"]
+						? unknown
+						: SameKeys<PathParameters<Definition["path"]>, keyof Config["fields"]> extends true
+							? HasDuplicateValues<
+									MappedFieldTuple<PathParameterTuple<Definition["path"]>, Config["fields"]>
+								> extends true
+								? CrudResourceTypeError<"pathParams.fields must map to unique fields">
+								: false extends {
+											[
+												Parameter in keyof Config["fields"]
+											]: Parameter extends keyof Definition["idFields"]
+												? SameValue<Config["fields"][Parameter], Definition["idFields"][Parameter]>
+												: false;
+									  }[keyof Config["fields"]]
+									? CrudResourceTypeError<"pathParams.fields must match parent idFields mappings">
+									: CrudPathParamTypesConstraint<Definition, Config, Output>
+							: CrudResourceTypeError<"path parameters must match pathParams.fields keys">
+					: CrudResourceTypeError<"pathParams.contract output keys must match pathParams.fields keys">
+				: CrudResourceTypeError<"pathParams.contract output parameters must all be required">
+	: never;
 
 type CrudPathParamsContractConstraint<Definition extends CrudResourceDefinition> =
 	Definition extends { readonly pathParams: infer Config extends CrudPathParamsConfig }
@@ -391,6 +434,50 @@ type CrudPathParamsContractConstraint<Definition extends CrudResourceDefinition>
 			: never
 		: unknown;
 
+type CrudRelationFieldConstraint<Definition extends CrudResourceDefinition> = Definition extends {
+	readonly relations: infer Relations extends Readonly<Record<string, CrudRelationConfig>>;
+}
+	? false extends {
+			[Name in keyof Relations]: Relations[Name] extends {
+				readonly local: readonly string[];
+				readonly foreign: readonly string[];
+				readonly target: () => infer Target extends AnyCrudResource;
+			}
+				? Exclude<Relations[Name]["local"][number], Definition["fields"][number]> extends never
+					? [Target] extends [never]
+						? true
+						: Exclude<Relations[Name]["foreign"][number], Target["fields"][number]> extends never
+							? true
+							: false
+					: false
+				: false;
+		}[keyof Relations]
+		? CrudResourceTypeError<"relation keys must use fields declared by their source and target resources">
+		: unknown
+	: unknown;
+
+type CrudSortExpressionField<Value> = Value extends `-${infer Field}` ? Field : Value;
+
+type CrudSortSelectionConstraint<Definition extends CrudResourceDefinition> = Definition extends {
+	readonly query: {
+		readonly sort: infer Sort extends {
+			readonly fields: readonly string[];
+			readonly default?: readonly string[];
+			readonly cursor?: readonly string[];
+		};
+	};
+}
+	? Exclude<
+			| (Sort extends { readonly default: readonly (infer Item)[] }
+					? CrudSortExpressionField<Item>
+					: never)
+			| (Sort extends { readonly cursor: readonly (infer Item)[] } ? Item : never),
+			Sort["fields"][number]
+		> extends never
+		? unknown
+		: CrudResourceTypeError<"sort.default and sort.cursor must use fields enabled by sort.fields">
+	: unknown;
+
 type CrudUpsertContractConstraint<Definition extends CrudResourceDefinition> =
 	Definition["operations"] extends { readonly upsert: unknown }
 		? Definition["contracts"] extends { readonly upsert: CrudSchemaSource }
@@ -400,21 +487,33 @@ type CrudUpsertContractConstraint<Definition extends CrudResourceDefinition> =
 
 /** Compile-time constraints applied to literal definitions by `defineCrudResource`. */
 export type CrudResourceDefinitionConstraint<Definition extends CrudResourceDefinition> =
-	CrudIdContractConstraint<Definition> &
+	CrudFieldVocabularyConstraint<Definition> &
+		CrudIdContractConstraint<Definition> &
 		CrudRouteSyntaxConstraint<Definition> &
 		CrudPathParamPresenceConstraint<Definition> &
 		CrudPathParamsContractConstraint<Definition> &
+		CrudRelationFieldConstraint<Definition> &
+		CrudRelationTupleConstraint<Definition> &
+		CrudSortSelectionConstraint<Definition> &
 		CrudUpsertContractConstraint<Definition>;
 
 export type AnyCrudResource = CrudResource<
 	string,
 	string,
+	CrudFieldTuple,
 	CrudSchemaSource,
 	CrudSchemaSource,
 	CrudSchemaSource,
 	CrudSchemaSource,
 	Readonly<Record<string, CrudRelationConfig>>,
 	CrudPathParamsConfig | undefined
+>;
+
+/** Complete logical field vocabulary declared by a concrete resource. */
+export type CrudField<Resource extends AnyCrudResource> = Resource["fields"][number];
+/** Logical values keyed only by fields declared on a concrete resource. */
+export type CrudFieldValues<Resource extends AnyCrudResource> = Readonly<
+	Partial<Record<CrudField<Resource>, unknown>>
 >;
 
 export type CrudId<Resource extends AnyCrudResource> = SchemaOutput<Resource["contracts"]["id"]>;
@@ -470,35 +569,14 @@ export type CrudValidatorType<Resource extends AnyCrudResource> = Type<
 >;
 export type CrudScopeType<Resource extends AnyCrudResource> = Type<CrudScope<Resource>>;
 
-type TupleValue<Value> = Value extends readonly (infer Item extends string)[] ? Item : never;
-type LiteralField<Value> = Value extends string ? (string extends Value ? never : Value) : never;
-type RelationLocalFields<Resource extends AnyCrudResource> = Resource extends {
+/** Complete logical fields accepted by the core for this resource. */
+export type CrudRequiredField<Resource extends AnyCrudResource> = CrudField<Resource>;
+
+/** Relation names accepted by `include` for a concrete resource. */
+export type CrudRelationName<Resource extends AnyCrudResource> = Resource extends {
 	readonly relations: infer Relations extends Readonly<Record<string, CrudRelationConfig>>;
 }
-	? {
-			[Name in keyof Relations]: TupleValue<Relations[Name]["local"]>;
-		}[keyof Relations]
+	? string extends keyof Relations
+		? string
+		: Extract<keyof Relations, string>
 	: never;
-
-/** Logical fields the core itself must be able to read or query. */
-export type CrudRequiredField<Resource extends AnyCrudResource> =
-	| LiteralField<Extract<Resource["idFields"][keyof Resource["idFields"]], string>>
-	| (Resource extends { readonly softDelete: { readonly field: infer Field extends string } }
-			? LiteralField<Field>
-			: never)
-	| (Resource extends {
-			readonly query: { readonly filters: infer Filters extends Readonly<Record<string, unknown>> };
-	  }
-			? LiteralField<Extract<keyof Filters, string>>
-			: never)
-	| (Resource extends {
-			readonly query: { readonly sort: { readonly fields: infer Fields } };
-	  }
-			? LiteralField<TupleValue<Fields>>
-			: never)
-	| (Resource extends {
-			readonly query: { readonly search: { readonly fields: infer Fields } };
-	  }
-			? LiteralField<TupleValue<Fields>>
-			: never)
-	| LiteralField<RelationLocalFields<Resource>>;

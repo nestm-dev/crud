@@ -56,6 +56,7 @@ const UserResponse = z.object({
 });
 
 export const users = defineCrudResource({
+	fields: ["id", "name"],
 	name: "users",
 	path: "users",
 	itemPath: ":id",
@@ -84,7 +85,6 @@ export const users = defineCrudResource({
 
 const usersBinding = bindMemoryCrud({
 	resource: users,
-	fields: ["id", "name"],
 	unique: [["id"]],
 	mappings: {
 		create: (input) => input,
@@ -210,6 +210,7 @@ and cursor tie-breaking:
 
 ```ts
 const tenantUsers = defineCrudResource({
+	fields: ["tenantId", "id"],
 	name: "tenant-users",
 	path: "tenant-users",
 	itemPath: ":tenantId/:id",
@@ -224,8 +225,8 @@ const tenantUsers = defineCrudResource({
 });
 ```
 
-The binding's `fields` must include both logical ID fields. ORM adapter column
-maps can translate those logical names to physical database columns.
+The resource's `fields` tuple is the authoritative logical vocabulary. ORM
+adapter column maps can translate those logical names to physical database columns.
 
 ## Nested resources
 
@@ -235,6 +236,7 @@ continues to describe the complete item route:
 
 ```ts
 const versions = defineCrudResource({
+	fields: ["artifactId", "versionId"],
 	name: "artifact-versions",
 	path: "artifacts/:artifactId/versions",
 	pathParams: {
@@ -395,13 +397,13 @@ from a compatibility controller:
 ```ts
 const viewerBindings = defineCrudResource({
 	// ...path, complete ID, and ordinary contracts
+	fields: ["artifactId", "viewerUserId", "mcpServerId", "toolPrefix", "allowedTools"],
 	contracts: { id, create, update, upsert: UpsertViewerBinding, response },
 	operations: crudOperations.only("upsert", "delete"),
 });
 
 const binding = bindTypeOrmCrud({
 	resource: viewerBindings,
-	fields,
 	adapter,
 	scopeCreateFields: ["viewerUserId"],
 	upsert: {
@@ -452,6 +454,7 @@ export class ProjectArtifactCounts implements CrudProjection {
 
 defineCrudResource({
 	// …
+	fields: ["id"],
 	projections: [ProjectArtifactCounts],
 });
 ```

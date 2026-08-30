@@ -5,15 +5,15 @@ export interface TypeOrmCompiledPredicate {
 	readonly parameters: Readonly<Record<string, unknown>>;
 }
 
-export type TypeOrmFieldResolver = (field: string) => string;
+export type TypeOrmFieldResolver<Field extends string = string> = (field: Field) => string;
 
-interface CompileState {
+interface CompileState<Field extends string> {
 	nextParameter: number;
 	readonly parameters: Record<string, unknown>;
-	readonly resolveField: TypeOrmFieldResolver;
+	readonly resolveField: TypeOrmFieldResolver<Field>;
 }
 
-function nextParameter(state: CompileState, value: unknown): string {
+function nextParameter<Field extends string>(state: CompileState<Field>, value: unknown): string {
 	const name = `crud_${state.nextParameter++}`;
 	state.parameters[name] = value;
 	return name;
@@ -30,9 +30,9 @@ function requireArray(value: unknown, operator: string): readonly unknown[] {
 	return value;
 }
 
-function compileComparison(
-	predicate: Extract<CrudPredicate, { kind: "comparison" }>,
-	state: CompileState,
+function compileComparison<Field extends string>(
+	predicate: Extract<CrudPredicate<Field>, { kind: "comparison" }>,
+	state: CompileState<Field>,
 ): string {
 	const field = state.resolveField(predicate.field);
 	const value = predicate.value;
@@ -88,7 +88,10 @@ function compileComparison(
 	}
 }
 
-function compileNode(predicate: CrudPredicate, state: CompileState): string {
+function compileNode<Field extends string>(
+	predicate: CrudPredicate<Field>,
+	state: CompileState<Field>,
+): string {
 	switch (predicate.kind) {
 		case "comparison":
 			return compileComparison(predicate, state);
@@ -104,10 +107,10 @@ function compileNode(predicate: CrudPredicate, state: CompileState): string {
 }
 
 /** Compiles the neutral CRUD predicate to TypeORM QueryBuilder SQL and named parameters. */
-export function compileTypeOrmPredicate(
-	predicate: CrudPredicate,
-	resolveField: TypeOrmFieldResolver,
+export function compileTypeOrmPredicate<Field extends string>(
+	predicate: CrudPredicate<Field>,
+	resolveField: TypeOrmFieldResolver<Field>,
 ): TypeOrmCompiledPredicate {
-	const state: CompileState = { nextParameter: 0, parameters: {}, resolveField };
+	const state: CompileState<Field> = { nextParameter: 0, parameters: {}, resolveField };
 	return { sql: compileNode(predicate, state), parameters: state.parameters };
 }

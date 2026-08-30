@@ -4,6 +4,7 @@ import {
 	type CrudBindingMappings,
 	type CrudBindingUpsertOptions,
 	type CompleteCrudFieldSelection,
+	type DefineCrudBindingOptions,
 	type CrudScopeCreateField,
 	type CrudResourceBinding,
 } from "@nestm/crud/adapter";
@@ -11,6 +12,7 @@ import type { ModuleMetadata } from "@nestjs/common";
 import type { DeepPartial, ObjectLiteral } from "typeorm";
 
 import type { TypeOrmCrudAdapter } from "./typeorm-adapter.ts";
+import type { TypeOrmCrudPropertyPath } from "./typeorm-adapter.ts";
 
 type BindableResource = CrudResourceBinding["resource"];
 
@@ -29,18 +31,24 @@ type TypeOrmScopeCreateField<EntityType extends ObjectLiteral> = CrudScopeCreate
 export type TypeOrmCrudAdapterProvider<
 	EntityType extends ObjectLiteral,
 	RecordType extends ObjectLiteral = EntityType,
-> = CrudAdapterProvider<RecordType, DeepPartial<EntityType>, DeepPartial<EntityType>>;
+	LogicalField extends string = TypeOrmCrudPropertyPath<EntityType>,
+> = CrudAdapterProvider<
+	RecordType,
+	DeepPartial<EntityType>,
+	DeepPartial<EntityType>,
+	TypeOrmCrudPropertyPath<EntityType>,
+	LogicalField
+>;
 
 interface BindTypeOrmCrudOptionsBase<
 	Resource extends BindableResource,
 	EntityType extends ObjectLiteral,
 	RecordType extends ObjectLiteral,
-	Fields extends readonly string[],
 	ScopeCreateFields extends readonly TypeOrmScopeCreateField<EntityType>[],
+	LogicalField extends string,
 > {
 	readonly resource: Resource;
 	readonly imports?: ModuleMetadata["imports"];
-	readonly fields: Fields;
 	readonly mappings: CrudBindingMappings<
 		Resource,
 		NoInfer<RecordType>,
@@ -59,32 +67,36 @@ interface BindTypeOrmCrudOptionsBase<
 	 */
 	readonly scopeCreateFields?: ScopeCreateFields;
 	/** Atomic upsert conflict-target and mutable-overwrite persistence paths. */
-	readonly upsert?: CrudBindingUpsertOptions;
+	readonly upsert?: CrudBindingUpsertOptions<TypeOrmCrudPropertyPath<EntityType>>;
 	/** Standard Nest provider form for an adapter; injected repositories remain application-owned. */
-	readonly adapter: TypeOrmCrudAdapterProvider<EntityType, RecordType>;
+	readonly adapter: TypeOrmCrudAdapterProvider<EntityType, RecordType, LogicalField>;
 }
 
 export type BindTypeOrmCrudOptions<
 	Resource extends BindableResource,
 	EntityType extends ObjectLiteral,
-	Fields extends readonly string[] = readonly string[],
 	ScopeCreateFields extends readonly TypeOrmScopeCreateField<EntityType>[] = readonly [],
 	RecordType extends ObjectLiteral = EntityType,
-> = BindTypeOrmCrudOptionsBase<Resource, EntityType, RecordType, Fields, ScopeCreateFields> &
-	CompleteCrudFieldSelection<Resource, Fields>;
+	LogicalField extends string = TypeOrmCrudPropertyPath<EntityType>,
+> = BindTypeOrmCrudOptionsBase<Resource, EntityType, RecordType, ScopeCreateFields, LogicalField> &
+	CompleteCrudFieldSelection<Resource, LogicalField>;
+
+export type TypeOrmCrudAdapterLogicalField<Adapter> =
+	Adapter extends TypeOrmCrudAdapter<infer _EntityType, infer _RecordType, infer LogicalField>
+		? LogicalField
+		: never;
 
 type BindTypeOrmCrudValueOptions<
 	Resource extends BindableResource,
 	Adapter,
-	Fields extends readonly string[],
 	ScopeCreateFields extends readonly TypeOrmScopeCreateField<TypeOrmCrudAdapterEntity<Adapter>>[],
 > = Omit<
 	BindTypeOrmCrudOptions<
 		Resource,
 		TypeOrmCrudAdapterEntity<Adapter>,
-		Fields,
 		ScopeCreateFields,
-		TypeOrmCrudAdapterRecord<Adapter>
+		TypeOrmCrudAdapterRecord<Adapter>,
+		TypeOrmCrudAdapterLogicalField<Adapter>
 	>,
 	"adapter"
 > & {
@@ -103,12 +115,8 @@ type BindTypeOrmCrudInjectedOptions<
 	Resource extends BindableResource,
 	EntityType extends ObjectLiteral,
 	RecordType extends ObjectLiteral,
-	Fields extends readonly string[],
 	ScopeCreateFields extends readonly TypeOrmScopeCreateField<EntityType>[],
-> = Omit<
-	BindTypeOrmCrudOptions<Resource, EntityType, Fields, ScopeCreateFields, RecordType>,
-	"adapter"
-> & {
+> = Omit<BindTypeOrmCrudOptions<Resource, EntityType, ScopeCreateFields, RecordType>, "adapter"> & {
 	readonly adapter: Exclude<
 		TypeOrmCrudAdapterProvider<EntityType, RecordType>,
 		{ readonly useValue: unknown }
@@ -119,60 +127,76 @@ type BindTypeOrmCrudInjectedOptions<
 export function bindTypeOrmCrud<
 	const Resource extends BindableResource,
 	const Adapter,
-	const Fields extends readonly string[],
 	const ScopeCreateFields extends readonly TypeOrmScopeCreateField<
 		TypeOrmCrudAdapterEntity<Adapter>
 	>[] = readonly [],
 >(
-	options: BindTypeOrmCrudValueOptions<Resource, Adapter, Fields, ScopeCreateFields>,
+	options: BindTypeOrmCrudValueOptions<Resource, Adapter, ScopeCreateFields>,
 ): CrudResourceBinding<
 	Resource,
 	TypeOrmCrudAdapterRecord<Adapter>,
-	Fields,
 	DeepPartial<TypeOrmCrudAdapterEntity<Adapter>>,
 	DeepPartial<TypeOrmCrudAdapterEntity<Adapter>>,
-	ScopeCreateFields[number]
+	ScopeCreateFields[number],
+	TypeOrmCrudPropertyPath<TypeOrmCrudAdapterEntity<Adapter>>,
+	TypeOrmCrudAdapterLogicalField<Adapter>
 >;
 export function bindTypeOrmCrud<
 	const Resource extends BindableResource,
 	EntityType extends ObjectLiteral,
-	const Fields extends readonly string[],
 	const ScopeCreateFields extends readonly TypeOrmScopeCreateField<EntityType>[] = readonly [],
 	RecordType extends ObjectLiteral = EntityType,
 >(
-	options: BindTypeOrmCrudInjectedOptions<
+	options: BindTypeOrmCrudInjectedOptions<Resource, EntityType, RecordType, ScopeCreateFields>,
+): CrudResourceBinding<
+	Resource,
+	RecordType,
+	DeepPartial<EntityType>,
+	DeepPartial<EntityType>,
+	ScopeCreateFields[number],
+	TypeOrmCrudPropertyPath<EntityType>,
+	TypeOrmCrudPropertyPath<EntityType>
+>;
+export function bindTypeOrmCrud<
+	const Resource extends BindableResource,
+	EntityType extends ObjectLiteral,
+	const ScopeCreateFields extends readonly TypeOrmScopeCreateField<EntityType>[] = readonly [],
+	RecordType extends ObjectLiteral = EntityType,
+	LogicalField extends string = string,
+>(
+	options: BindTypeOrmCrudOptions<
 		Resource,
 		EntityType,
+		ScopeCreateFields,
 		RecordType,
-		Fields,
-		ScopeCreateFields
+		LogicalField
 	>,
 ): CrudResourceBinding<
 	Resource,
 	RecordType,
-	Fields,
 	DeepPartial<EntityType>,
 	DeepPartial<EntityType>,
-	ScopeCreateFields[number]
->;
-export function bindTypeOrmCrud<
-	const Resource extends BindableResource,
-	EntityType extends ObjectLiteral,
-	const Fields extends readonly string[],
-	const ScopeCreateFields extends readonly TypeOrmScopeCreateField<EntityType>[] = readonly [],
-	RecordType extends ObjectLiteral = EntityType,
->(
-	options: BindTypeOrmCrudOptions<Resource, EntityType, Fields, ScopeCreateFields, RecordType>,
-): CrudResourceBinding<
-	Resource,
-	RecordType,
-	Fields,
-	DeepPartial<EntityType>,
-	DeepPartial<EntityType>,
-	ScopeCreateFields[number]
+	ScopeCreateFields[number],
+	TypeOrmCrudPropertyPath<EntityType>,
+	LogicalField
 > {
-	return defineCrudBinding({
-		...options,
-		adapter: options.adapter,
-	});
+	return defineCrudBinding<
+		Resource,
+		RecordType,
+		DeepPartial<EntityType>,
+		DeepPartial<EntityType>,
+		ScopeCreateFields,
+		TypeOrmCrudPropertyPath<EntityType>,
+		LogicalField
+	>(
+		options as unknown as DefineCrudBindingOptions<
+			Resource,
+			RecordType,
+			DeepPartial<EntityType>,
+			DeepPartial<EntityType>,
+			ScopeCreateFields,
+			TypeOrmCrudPropertyPath<EntityType>,
+			LogicalField
+		>,
+	);
 }

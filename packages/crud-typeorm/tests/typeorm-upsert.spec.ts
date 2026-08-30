@@ -470,7 +470,7 @@ describe("TypeOrmCrudAdapter atomic upsert", () => {
 	});
 
 	it("rejects partial, duplicated, non-unique, and absent conflict paths before DML", async () => {
-		const cases: readonly CrudUpsertInput<DeepPartial<UpsertEntity>>[] = [
+		const cases: readonly Parameters<ReturnType<typeof selectedAdapter>["upsert"]>[0][] = [
 			{ ...UPSERT_INPUT, conflictFields: ["tenantId"] },
 			{ ...UPSERT_INPUT, conflictFields: ["tenantId", "tenantId"] },
 			{ ...UPSERT_INPUT, conflictFields: ["tenantId", "name"] },
@@ -523,7 +523,16 @@ describe("TypeOrmCrudAdapter atomic upsert", () => {
 		for (const overwriteFields of [["id"], ["immutable"], ["missing"], ["name", "name"]] as const) {
 			const harness = createUpsertHarness();
 			await expect(
-				selectedAdapter(harness).upsert({ ...UPSERT_INPUT, overwriteFields }, context()),
+				selectedAdapter(harness).upsert(
+					{
+						...UPSERT_INPUT,
+						// Deliberately bypass the public field vocabulary to exercise runtime defenses.
+						overwriteFields: overwriteFields as CrudUpsertInput<
+							DeepPartial<UpsertEntity>
+						>["overwriteFields"],
+					},
+					context(),
+				),
 			).rejects.toMatchObject({ code: "unsupported" } satisfies Partial<CrudAdapterError>);
 			expect(harness.capture.inserts).toHaveLength(0);
 		}

@@ -32,6 +32,7 @@ const contracts = {
 } as const;
 
 const offsetResource = defineCrudResource({
+	fields: ["id", "name", "createdAt", "deletedAt"],
 	name: "openapi-offset",
 	path: "matrix/offset",
 	itemPath: ":id",
@@ -43,6 +44,7 @@ const offsetResource = defineCrudResource({
 });
 
 const cursorResource = defineCrudResource({
+	fields: ["id", "name", "createdAt", "deletedAt"],
 	name: "openapi-cursor",
 	path: "matrix/cursor",
 	itemPath: ":id",
@@ -56,6 +58,7 @@ const cursorResource = defineCrudResource({
 });
 
 const dualResource = defineCrudResource({
+	fields: ["id", "name", "createdAt", "deletedAt"],
 	name: "openapi-dual",
 	path: "matrix/dual",
 	itemPath: ":id",
@@ -69,6 +72,7 @@ const dualResource = defineCrudResource({
 });
 
 const compositeResource = defineCrudResource({
+	fields: ["tenantId", "id", "name"],
 	name: "openapi-composite",
 	path: "matrix/composite",
 	itemPath: ":tenantId/:id",
@@ -84,6 +88,7 @@ const compositeResource = defineCrudResource({
 });
 
 const nestedResource = defineCrudResource({
+	fields: ["parentId", "id", "name"],
 	name: "openapi-nested",
 	path: "matrix/parents/:parentId/children",
 	itemPath: ":id",
@@ -104,6 +109,7 @@ const nestedResource = defineCrudResource({
 });
 
 const relatedResource = defineCrudResource({
+	fields: ["id", "name", "createdAt", "deletedAt"],
 	name: "openapi-related",
 	path: "matrix/related",
 	itemPath: ":id",

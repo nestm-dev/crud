@@ -11,7 +11,7 @@ const users = pgTable("users", {
 
 describe("compileDrizzlePredicate", () => {
 	it("uses placeholders for values and quoted configured columns", () => {
-		const predicate: CrudPredicate = {
+		const predicate: CrudPredicate<"id" | "name"> = {
 			kind: "and",
 			predicates: [
 				{ kind: "comparison", field: "id", operator: "gte", value: 10 },
@@ -29,7 +29,13 @@ describe("compileDrizzlePredicate", () => {
 	it("rejects unmapped fields", () => {
 		expect(() =>
 			compileDrizzlePredicate(
-				{ kind: "comparison", field: "email", operator: "eq", value: "x" },
+				{
+					kind: "comparison",
+					// Deliberately bypass static field checking to verify the runtime guard.
+					field: "email" as "id",
+					operator: "eq",
+					value: "x",
+				},
 				{ id: users.id },
 			),
 		).toThrow("does not map");

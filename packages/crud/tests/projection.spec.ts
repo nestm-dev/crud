@@ -15,6 +15,7 @@ import { FakeCrudAdapter } from "./support/fake-crud-adapter.ts";
  * can produce, so the adapter cannot see it and only a batch query can resolve it cheaply.
  */
 const articleResource = defineCrudResource({
+	fields: ["id", "title"],
 	name: "articles",
 	path: "articles",
 	itemPath: ":id",
@@ -38,7 +39,6 @@ function articleBinding(adapter: FakeCrudAdapter) {
 	return defineCrudBinding({
 		resource: articleResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "title"],
 		mappings: {
 			create: (input) => ({ title: input.title }),
 			update: (input) => (input.title === undefined ? {} : { title: input.title }),
@@ -186,7 +186,6 @@ describe("batch projections", () => {
 		const binding = defineCrudBinding({
 			resource: articleResource,
 			adapter: { useValue: adapter },
-			fields: ["id", "title"],
 			mappings: {
 				create: (input) => ({ title: input.title }),
 				update: (input) => (input.title === undefined ? {} : { title: input.title }),
@@ -239,6 +238,7 @@ describe("batch projections", () => {
 /* ── relation targets ─────────────────────────────────────────────────────────────────────── */
 
 const commentResource = defineCrudResource({
+	fields: ["id", "articleId", "body"],
 	name: "comments",
 	path: "comments",
 	itemPath: ":id",
@@ -258,6 +258,7 @@ const commentResource = defineCrudResource({
 });
 
 const articleWithComments = defineCrudResource({
+	fields: ["id", "title"],
 	name: "articles-with-comments",
 	path: "articles-with-comments",
 	itemPath: ":id",
@@ -304,7 +305,6 @@ describe("projections on relation targets", () => {
 		const commentBinding = defineCrudBinding({
 			resource: commentResource,
 			adapter: { useValue: commentAdapter },
-			fields: ["id", "articleId", "body"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,
@@ -324,7 +324,6 @@ describe("projections on relation targets", () => {
 		const parentBinding = defineCrudBinding({
 			resource: articleWithComments,
 			adapter: { useValue: articleAdapter },
-			fields: ["id", "title"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,

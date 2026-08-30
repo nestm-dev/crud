@@ -6,21 +6,31 @@ import type {
 	CrudValues,
 } from "../adapter/adapter.types.ts";
 
-export interface CrudAdapterConformanceFixture<RecordType> {
+type CrudAdapterConformanceField<RecordType> = RecordType extends object
+	? Extract<keyof RecordType, string>
+	: string;
+
+export interface CrudAdapterConformanceFixture<
+	RecordType,
+	Field extends string = CrudAdapterConformanceField<RecordType>,
+> {
 	readonly adapter: CrudAdapter<RecordType>;
 	readonly first: CrudValues;
 	readonly second: CrudValues;
 	readonly update: CrudValues;
-	readonly idField: string;
-	readonly sortField: string;
+	readonly idField: Field;
+	readonly sortField: Field;
 	/** IDs in the exact order produced by sorting `sortField` ascending. */
 	readonly expectedAscendingIds: readonly [unknown, unknown];
 	readonly getId: (record: RecordType) => unknown;
 }
 
-export interface CrudAdapterConformanceCase<RecordType> {
+export interface CrudAdapterConformanceCase<
+	RecordType,
+	Field extends string = CrudAdapterConformanceField<RecordType>,
+> {
 	readonly name: string;
-	readonly run: (fixture: CrudAdapterConformanceFixture<RecordType>) => Promise<void>;
+	readonly run: (fixture: CrudAdapterConformanceFixture<RecordType, Field>) => Promise<void>;
 }
 
 /**
@@ -29,7 +39,8 @@ export interface CrudAdapterConformanceCase<RecordType> {
  */
 export function createCrudAdapterConformanceCases<
 	RecordType,
->(): readonly CrudAdapterConformanceCase<RecordType>[] {
+	Field extends string = CrudAdapterConformanceField<RecordType>,
+>(): readonly CrudAdapterConformanceCase<RecordType, Field>[] {
 	return [
 		{
 			name: "creates a record and reads it back by predicate",
@@ -283,11 +294,15 @@ export function createCrudAdapterConformanceCases<
 	];
 }
 
-export async function runCrudAdapterConformance<RecordType>(
+export async function runCrudAdapterConformance<
+	RecordType,
+	Field extends string = CrudAdapterConformanceField<RecordType>,
+>(
 	createFixture: () =>
-		CrudAdapterConformanceFixture<RecordType> | Promise<CrudAdapterConformanceFixture<RecordType>>,
+		| CrudAdapterConformanceFixture<RecordType, Field>
+		| Promise<CrudAdapterConformanceFixture<RecordType, Field>>,
 ): Promise<void> {
-	for (const testCase of createCrudAdapterConformanceCases<RecordType>()) {
+	for (const testCase of createCrudAdapterConformanceCases<RecordType, Field>()) {
 		await testCase.run(await createFixture());
 	}
 }
@@ -300,8 +315,8 @@ function comparison(field: string, operator: "eq" | "isnull", value: unknown) {
 	return { kind: "comparison" as const, field, operator, value };
 }
 
-async function seedPair<RecordType>(
-	fixture: CrudAdapterConformanceFixture<RecordType>,
+async function seedPair<RecordType, Field extends string>(
+	fixture: CrudAdapterConformanceFixture<RecordType, Field>,
 ): Promise<void> {
 	const first = await fixture.adapter.create({ values: fixture.first }, adapterContext("create"));
 	const second = await fixture.adapter.create({ values: fixture.second }, adapterContext("create"));

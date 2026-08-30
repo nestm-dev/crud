@@ -45,6 +45,18 @@ void referenceChecker.exists(
 	},
 	typedValidationContext,
 );
+void referenceChecker.exists(
+	{
+		predicate: {
+			kind: "comparison",
+			// @ts-expect-error reference predicates use the checker's exact logical columns.
+			field: "name",
+			operator: "eq",
+			value: "Ada",
+		},
+	},
+	typedValidationContext,
+);
 // @ts-expect-error Reference checks cannot be invoked without an active session.
 void referenceChecker.exists({ predicate: { kind: "and", predicates: [] } }, {});
 // @ts-expect-error Reference checks must always declare an explicit scoped predicate.
@@ -55,6 +67,21 @@ export const adapter = createTypeOrmCrudAdapter({
 	columns: { id: "id", name: "name", tenantId: "tenantId", secret: "secret" },
 	transaction: { isolationLevel: TypeOrmCrudTransactionIsolationLevel.RepeatableRead },
 });
+
+void adapter.findMany(
+	{
+		order: [
+			{
+				// @ts-expect-error query fields are inferred from the adapter's logical columns.
+				field: "email",
+				direction: "asc",
+			},
+		],
+		limit: 10,
+		count: false,
+	},
+	{ resource: "users", operation: "list" },
+);
 
 export const selectedAdapter = createTypeOrmCrudAdapter({
 	repository,
@@ -186,7 +213,9 @@ void widenedAdapter;
 const nativeAdapter: CrudAdapter<
 	UserEntity,
 	DeepPartial<UserEntity>,
-	DeepPartial<UserEntity>
+	DeepPartial<UserEntity>,
+	keyof UserEntity,
+	"id" | "name" | "tenantId" | "secret"
 > = adapter;
 void nativeAdapter;
 
@@ -209,6 +238,7 @@ void adapter.create(
 );
 
 const resource = defineCrudResource({
+	fields: ["id", "name", "tenantId"],
 	name: "typeorm-users",
 	path: "typeorm-users",
 	itemPath: ":id",
@@ -223,6 +253,7 @@ const resource = defineCrudResource({
 });
 
 const upsertResource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "typeorm-user-upserts",
 	path: "typeorm-user-upserts",
 	itemPath: ":id",
@@ -237,12 +268,9 @@ const upsertResource = defineCrudResource({
 	operations: crudOperations.only("upsert"),
 });
 
-const fields = ["id", "name", "tenantId"] as const;
-
 const selectedBinding = bindTypeOrmCrud({
 	resource,
 	adapter: { useValue: selectedAdapter },
-	fields: ["id", "name"],
 	mappings: {
 		create: (input) => ({ name: input.name, tenantId: "tenant", secret: "encrypted" }),
 		update: (input) => input,
@@ -259,7 +287,6 @@ const selectedBinding = bindTypeOrmCrud({
 const binding = bindTypeOrmCrud({
 	resource,
 	adapter: { useValue: adapter },
-	fields,
 	mappings: {
 		create: (input) => ({ name: input.name, tenantId: "tenant" }),
 		update: (input) => (input.name === undefined ? {} : { name: input.name }),
@@ -269,10 +296,9 @@ const binding = bindTypeOrmCrud({
 	},
 });
 
-const invalidOptions: BindTypeOrmCrudOptions<typeof resource, UserEntity, typeof fields> = {
+const invalidOptions: BindTypeOrmCrudOptions<typeof resource, UserEntity> = {
 	resource,
 	adapter: { useValue: adapter },
-	fields,
 	mappings: {
 		// @ts-expect-error binder mappings must return DeepPartial<Entity> values.
 		create: () => ({ name: 123 }),
@@ -295,7 +321,6 @@ const invalidOptions: BindTypeOrmCrudOptions<typeof resource, UserEntity, typeof
 const scopedBinding = bindTypeOrmCrud({
 	resource,
 	adapter: { useValue: adapter },
-	fields,
 	scopeCreateFields: ["tenantId"],
 	mappings: {
 		create: (input) => ({ name: input.name }),
@@ -308,7 +333,6 @@ const scopedBinding = bindTypeOrmCrud({
 const upsertBinding = bindTypeOrmCrud({
 	resource: upsertResource,
 	adapter: { useValue: adapter },
-	fields,
 	scopeCreateFields: ["tenantId"],
 	upsert: {
 		conflictFields: ["id"],
@@ -323,10 +347,41 @@ const upsertBinding = bindTypeOrmCrud({
 	},
 });
 
+const invalidLogicalFieldResource = defineCrudResource({
+	...resource,
+	fields: ["id", "name", "tenantId", "email"],
+	name: "invalid-logical-field-resource",
+	path: "invalid-logical-field-resource",
+});
+
+// @ts-expect-error every resource field must exist in the adapter's logical column vocabulary.
+const invalidLogicalFieldBinding = bindTypeOrmCrud({
+	resource: invalidLogicalFieldResource,
+	adapter: { useValue: adapter },
+	mappings: {
+		create: (input) => ({ name: input.name, tenantId: "tenant" }),
+		update: (input) => (input.name === undefined ? {} : { name: input.name }),
+		persistence: () => ({}),
+		response: (record) => ({ id: record.id, name: record.name }),
+	},
+});
+
+const invalidUpsertPersistenceFieldBinding = bindTypeOrmCrud({
+	resource: upsertResource,
+	adapter: { useValue: adapter },
+	upsert: {
+		conflictFields: [
+			// @ts-expect-error conflict fields must be TypeORM entity property paths.
+			"workspaceId",
+		],
+		overwriteFields: ["name"],
+	},
+	mappings: upsertBinding.mappings,
+});
+
 type InvalidScopeCreateField = BindTypeOrmCrudOptions<
 	typeof resource,
 	UserEntity,
-	typeof fields,
 	// @ts-expect-error scope-owned fields must be properties of the entity's create values.
 	readonly ["notAColumn"]
 >;
@@ -336,5 +391,7 @@ void selectedBinding;
 void invalidOptions;
 void scopedBinding;
 void upsertBinding;
+void invalidLogicalFieldBinding;
+void invalidUpsertPersistenceFieldBinding;
 declare const invalidScopeCreateField: InvalidScopeCreateField;
 void invalidScopeCreateField;

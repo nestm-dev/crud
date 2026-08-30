@@ -88,6 +88,7 @@ class RollbackHook implements CrudLifecycleHook {
 class AdvancedHttpSupportModule {}
 
 const membershipResource = defineCrudResource({
+	fields: ["tenantId", "id", "name", "createdAt"],
 	name: "advanced-memberships",
 	path: "advanced/memberships",
 	itemPath: ":tenantId/:id",
@@ -121,6 +122,7 @@ const membershipResource = defineCrudResource({
 });
 
 const childResource = defineCrudResource({
+	fields: ["id", "parentId", "name"],
 	name: "advanced-children",
 	path: "advanced/children",
 	itemPath: ":id",
@@ -136,6 +138,7 @@ const childResource = defineCrudResource({
 });
 
 const parentResource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "advanced-parents",
 	path: "advanced/parents",
 	itemPath: ":id",
@@ -166,6 +169,7 @@ const parentResource = defineCrudResource({
 });
 
 const scopedResource = defineCrudResource({
+	fields: ["id", "tenantId", "name"],
 	name: "advanced-scoped-records",
 	path: "advanced/scoped-records",
 	itemPath: ":id",
@@ -182,6 +186,7 @@ const scopedResource = defineCrudResource({
 });
 
 const rollbackResource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "advanced-rollback-records",
 	path: "advanced/rollback-records",
 	itemPath: ":id",
@@ -198,6 +203,7 @@ const rollbackResource = defineCrudResource({
 });
 
 const protectedResource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "advanced-protected-records",
 	path: "advanced/protected-records",
 	itemPath: ":id",
@@ -217,6 +223,7 @@ const protectedResource = defineCrudResource({
 });
 
 const failingResource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "advanced-failing-records",
 	path: "advanced/failing-records",
 	itemPath: ":id",
@@ -372,7 +379,6 @@ function membershipBinding() {
 	return defineCrudBinding({
 		resource: membershipResource,
 		adapter: { useValue: adapter },
-		fields: ["tenantId", "id", "name", "createdAt"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
@@ -396,7 +402,6 @@ function childBinding() {
 	return defineCrudBinding({
 		resource: childResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "parentId", "name"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
@@ -418,7 +423,6 @@ function parentBinding() {
 	return defineCrudBinding({
 		resource: parentResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "name"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
@@ -442,7 +446,6 @@ function scopedBinding() {
 	return defineCrudBinding({
 		resource: scopedResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "tenantId", "name"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
@@ -460,7 +463,6 @@ function rollbackBinding(adapter: FakeCrudAdapter) {
 	return defineCrudBinding({
 		resource: rollbackResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "name"],
 		mappings: basicMappings,
 	});
 }
@@ -470,7 +472,6 @@ function protectedBinding() {
 	return defineCrudBinding({
 		resource: protectedResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "name"],
 		mappings: basicMappings,
 	});
 }
@@ -479,7 +480,6 @@ function failingBinding(adapter: FakeCrudAdapter) {
 	return defineCrudBinding({
 		resource: failingResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "name"],
 		mappings: basicMappings,
 	});
 }

@@ -25,14 +25,16 @@ export interface CrudFilterFieldConfig<Source extends CrudSchemaSource = CrudSch
 	readonly operators: readonly CrudFilterOperator[];
 }
 
-export interface CrudSortConfig {
-	readonly fields: readonly string[];
-	readonly default?: readonly string[];
-	readonly cursor?: readonly string[];
+export type CrudSortExpression<Field extends string = string> = Field | `-${Field}`;
+
+export interface CrudSortConfig<Field extends string = string> {
+	readonly fields: readonly Field[];
+	readonly default?: readonly CrudSortExpression<Field>[];
+	readonly cursor?: readonly Field[];
 }
 
-export interface CrudSearchConfig {
-	readonly fields: readonly string[];
+export interface CrudSearchConfig<Field extends string = string> {
+	readonly fields: readonly Field[];
 	readonly minLength?: number;
 	readonly maxLength?: number;
 }
@@ -44,52 +46,57 @@ export interface CrudPaginationConfig {
 	readonly maxLimit?: number;
 }
 
-export interface CrudQueryConfig {
-	readonly filters?: Readonly<Record<string, CrudFilterFieldConfig>>;
-	readonly sort?: CrudSortConfig;
-	readonly search?: CrudSearchConfig;
+type CrudFilterConfigMap<Field extends string> = string extends Field
+	? Readonly<Record<string, CrudFilterFieldConfig>>
+	: Readonly<Partial<Record<Field, CrudFilterFieldConfig>>>;
+
+export interface CrudQueryConfig<Field extends string = string> {
+	readonly filters?: CrudFilterConfigMap<Field>;
+	readonly sort?: CrudSortConfig<Field>;
+	readonly search?: CrudSearchConfig<Field>;
 	readonly pagination?: CrudPaginationConfig;
 }
 
-export type CrudPredicate =
+export type CrudPredicate<Field extends string = string> =
 	| {
 			readonly kind: "comparison";
-			readonly field: string;
+			readonly field: Field;
 			readonly operator: CrudFilterOperator;
 			readonly value: unknown;
 	  }
-	| { readonly kind: "and"; readonly predicates: readonly CrudPredicate[] }
-	| { readonly kind: "or"; readonly predicates: readonly CrudPredicate[] }
-	| { readonly kind: "not"; readonly predicate: CrudPredicate };
+	| { readonly kind: "and"; readonly predicates: readonly CrudPredicate<Field>[] }
+	| { readonly kind: "or"; readonly predicates: readonly CrudPredicate<Field>[] }
+	| { readonly kind: "not"; readonly predicate: CrudPredicate<Field> };
 
-export interface CrudOrder {
-	readonly field: string;
+export interface CrudOrder<Field extends string = string> {
+	readonly field: Field;
 	readonly direction: CrudSortDirection;
 }
 
-export interface CrudOffsetQuery {
+export interface CrudOffsetQuery<Field extends string = string, Include extends string = string> {
 	readonly mode: "offset";
 	readonly page: number;
 	readonly limit: number;
-	readonly predicate?: CrudPredicate;
-	readonly order: readonly CrudOrder[];
+	readonly predicate?: CrudPredicate<Field>;
+	readonly order: readonly CrudOrder<Field>[];
 	readonly search?: string;
-	readonly includes: readonly string[];
+	readonly includes: readonly Include[];
 	readonly deleted: "exclude" | "include" | "only";
 }
 
-export interface CrudCursorQuery {
+export interface CrudCursorQuery<Field extends string = string, Include extends string = string> {
 	readonly mode: "cursor";
 	readonly after?: string;
 	readonly limit: number;
-	readonly predicate?: CrudPredicate;
-	readonly order: readonly CrudOrder[];
+	readonly predicate?: CrudPredicate<Field>;
+	readonly order: readonly CrudOrder<Field>[];
 	readonly search?: string;
-	readonly includes: readonly string[];
+	readonly includes: readonly Include[];
 	readonly deleted: "exclude" | "include" | "only";
 }
 
-export type CrudListQuery = CrudOffsetQuery | CrudCursorQuery;
+export type CrudListQuery<Field extends string = string, Include extends string = string> =
+	CrudOffsetQuery<Field, Include> | CrudCursorQuery<Field, Include>;
 
 export interface CrudOffsetMeta {
 	readonly mode: "offset";
@@ -117,11 +124,11 @@ export interface CrudPage<T> {
 
 export type CrudRawQuery = URLSearchParams | Readonly<Record<string, unknown>>;
 
-export interface CrudQueryParserOptions {
+export interface CrudQueryParserOptions<Field extends string = string> {
 	/** Codec used to verify and decode an `after` cursor. */
 	readonly cursorCodec?: CrudCursorCodec;
 	/** Route-owned values that bind a cursor to one nested collection. */
-	readonly cursorFixedValues?: readonly CrudCursorFixedValue[];
+	readonly cursorFixedValues?: readonly CrudCursorFixedValue<Field>[];
 	/** Used when a resource does not configure a default limit. */
 	readonly defaultLimit?: number;
 	/** Used when a resource does not configure a maximum limit. */

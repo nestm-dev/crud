@@ -8,6 +8,7 @@ import type {
 	CrudFindManyInput,
 	CrudFindManyResult,
 	CrudFindOneInput,
+	CrudPersistenceField,
 	CrudPredicate,
 	CrudUpdateInput,
 } from "@nestm/crud/adapter";
@@ -28,6 +29,10 @@ import { compileDrizzlePredicate, type DrizzleCrudColumns } from "./drizzle-pred
 
 export type DrizzleCrudCreateValues<Table extends AnyPgTable> = InferInsertModel<Table>;
 export type DrizzleCrudUpdateValues<Table extends AnyPgTable> = Partial<InferInsertModel<Table>>;
+export type DrizzleCrudLogicalField<Columns extends Readonly<Record<string, unknown>>> = Extract<
+	keyof Columns,
+	string
+>;
 
 export type DrizzleCrudDatabase<
 	QueryResult extends PgQueryResultHKT,
@@ -100,14 +105,17 @@ export interface DrizzleCrudAdapterOptions<
 	QueryResult extends PgQueryResultHKT,
 	FullSchema extends Record<string, unknown>,
 	Schema extends TablesRelationalConfig,
+	Columns extends DrizzleCrudColumns<Table> = DrizzleCrudColumns<Table>,
 > {
 	/** A Drizzle database owned and lifecycle-managed by the consuming application. */
 	readonly database: PgDatabase<QueryResult, FullSchema, Schema>;
 	readonly table: Table;
 	/** Maps public logical field names to columns on `table`. */
-	readonly columns: DrizzleCrudColumns;
+	readonly columns: Columns;
 	/** Maps logical fields to keys in returned row objects; defaults to the logical field. */
-	readonly recordKeys?: Readonly<Record<string, string>>;
+	readonly recordKeys?: Readonly<
+		Partial<Record<Extract<keyof Columns, string>, Extract<keyof InferSelectModel<Table>, string>>>
+	>;
 	/**
 	 * Minimum isolation for the complete CRUD operation, including scopes,
 	 * lifecycle hooks, validators, mappings, projections, and persistence.
@@ -278,10 +286,13 @@ export class DrizzleCrudAdapter<
 	QueryResult extends PgQueryResultHKT,
 	FullSchema extends Record<string, unknown>,
 	Schema extends TablesRelationalConfig,
+	Columns extends DrizzleCrudColumns<Table> = DrizzleCrudColumns<Table>,
 > implements CrudAdapter<
 	InferSelectModel<Table>,
 	DrizzleCrudCreateValues<Table>,
-	DrizzleCrudUpdateValues<Table>
+	DrizzleCrudUpdateValues<Table>,
+	CrudPersistenceField<DrizzleCrudCreateValues<Table>>,
+	DrizzleCrudLogicalField<Columns>
 > {
 	readonly capabilities = Object.freeze({
 		transactions: true,
@@ -293,7 +304,7 @@ export class DrizzleCrudAdapter<
 	readonly #database: PgDatabase<QueryResult, FullSchema, Schema>;
 	readonly #table: Table;
 	readonly #columns: DrizzleCrudColumns;
-	readonly #recordKeys: Readonly<Record<string, string>>;
+	readonly #recordKeys: Readonly<Partial<Record<string, string>>>;
 	readonly #operationIsolationLevel: DrizzleCrudTransactionIsolationLevel | undefined;
 	readonly #transactionRunner:
 		DrizzleCrudTransactionRunner<QueryResult, FullSchema, Schema> | undefined;
@@ -308,7 +319,7 @@ export class DrizzleCrudAdapter<
 		>
 	>();
 
-	constructor(options: DrizzleCrudAdapterOptions<Table, QueryResult, FullSchema, Schema>) {
+	constructor(options: DrizzleCrudAdapterOptions<Table, QueryResult, FullSchema, Schema, Columns>) {
 		this.#database = options.database;
 		this.#table = options.table;
 		this.#columns = Object.freeze({ ...options.columns });
@@ -370,7 +381,7 @@ export class DrizzleCrudAdapter<
 	}
 
 	async findOne(
-		input: CrudFindOneInput,
+		input: CrudFindOneInput<DrizzleCrudLogicalField<Columns>>,
 		context: CrudAdapterContext,
 	): Promise<InferSelectModel<Table> | null> {
 		try {
@@ -404,7 +415,7 @@ export class DrizzleCrudAdapter<
 	}
 
 	async findMany(
-		input: CrudFindManyInput,
+		input: CrudFindManyInput<DrizzleCrudLogicalField<Columns>>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<InferSelectModel<Table>>> {
 		try {
@@ -443,7 +454,7 @@ export class DrizzleCrudAdapter<
 	}
 
 	async update(
-		input: CrudUpdateInput<DrizzleCrudUpdateValues<Table>>,
+		input: CrudUpdateInput<DrizzleCrudUpdateValues<Table>, DrizzleCrudLogicalField<Columns>>,
 		context: CrudAdapterContext,
 	): Promise<InferSelectModel<Table> | null> {
 		try {
@@ -474,7 +485,7 @@ export class DrizzleCrudAdapter<
 	}
 
 	async delete(
-		input: CrudDeleteInput,
+		input: CrudDeleteInput<DrizzleCrudLogicalField<Columns>>,
 		context: CrudAdapterContext,
 	): Promise<InferSelectModel<Table> | null> {
 		try {
@@ -500,7 +511,7 @@ export class DrizzleCrudAdapter<
 		}
 	}
 
-	getField(record: InferSelectModel<Table>, field: string): unknown {
+	getField(record: InferSelectModel<Table>, field: DrizzleCrudLogicalField<Columns>): unknown {
 		const key = this.#recordKeys[field] ?? field;
 		return (record as Readonly<Record<string, unknown>>)[key];
 	}
@@ -723,8 +734,9 @@ export function createDrizzleCrudAdapter<
 	QueryResult extends PgQueryResultHKT,
 	FullSchema extends Record<string, unknown>,
 	Schema extends TablesRelationalConfig,
+	const Columns extends DrizzleCrudColumns<Table>,
 >(
-	options: DrizzleCrudAdapterOptions<Table, QueryResult, FullSchema, Schema>,
-): DrizzleCrudAdapter<Table, QueryResult, FullSchema, Schema> {
+	options: DrizzleCrudAdapterOptions<Table, QueryResult, FullSchema, Schema, Columns>,
+): DrizzleCrudAdapter<Table, QueryResult, FullSchema, Schema, Columns> {
 	return new DrizzleCrudAdapter(options);
 }

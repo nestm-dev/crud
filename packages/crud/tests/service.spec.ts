@@ -141,7 +141,6 @@ describe("CrudService visibility and identity", () => {
 		const binding = defineCrudBinding({
 			resource: userResource,
 			adapter: { useValue: typedAdapter },
-			fields: ["id", "name", "tenantId", "deletedAt"],
 			scopeCreateFields,
 			mappings: {
 				create: (input) => ({ name: input.name, deletedAt: null }),
@@ -255,7 +254,6 @@ describe("CrudService transaction and lifecycle semantics", () => {
 		const binding = defineCrudBinding({
 			resource: userResource,
 			adapter: { useValue: adapter },
-			fields: ["id", "name", "tenantId", "deletedAt"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,
@@ -968,7 +966,6 @@ describe("CrudService nested resource context", () => {
 		const binding = defineCrudBinding({
 			resource: nestedChildResource,
 			adapter: { useValue: adapter },
-			fields: ["parentId", "id", "name"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,
@@ -992,6 +989,7 @@ describe("CrudService nested resource context", () => {
 
 	it("requires explicit parent materialization for nested upsert-only resources", () => {
 		const resource = defineCrudResource({
+			fields: ["parentId", "id", "name"],
 			name: "nested-upsert-only",
 			path: "parents/:parentId/upsert-only",
 			itemPath: ":id",
@@ -1013,7 +1011,6 @@ describe("CrudService nested resource context", () => {
 		const bindingOptions = {
 			resource,
 			adapter: { useValue: adapter },
-			fields: ["parentId", "id", "name"] as const,
 			upsert: { conflictFields: ["parentId", "id"], overwriteFields: ["name"] } as const,
 			mappings: {
 				create: (input: { name: string }) => input,
@@ -1063,6 +1060,7 @@ describe("CrudService nested resource context", () => {
 describe("CrudService soft deletion", () => {
 	it("supports explicitly idempotent deletes without running mutation hooks for absent rows", async () => {
 		const resource = defineCrudResource({
+			fields: ["id", "name"],
 			name: "idempotent-records",
 			path: "idempotent-records",
 			itemPath: ":id",
@@ -1079,7 +1077,6 @@ describe("CrudService soft deletion", () => {
 		const binding = defineCrudBinding({
 			resource,
 			adapter: { useValue: adapter },
-			fields: ["id", "name"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,
@@ -1146,6 +1143,7 @@ describe("CrudService soft deletion", () => {
 describe("CrudService persistence field mapping", () => {
 	it("omits an empty persistence mapper and removes undefined mapper properties", async () => {
 		const resource = defineCrudResource({
+			fields: ["id", "name"],
 			name: "direct-users",
 			path: "direct-users",
 			itemPath: ":id",
@@ -1162,7 +1160,6 @@ describe("CrudService persistence field mapping", () => {
 		const binding = defineCrudBinding({
 			resource,
 			adapter: { useValue: adapter },
-			fields: ["id", "name"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,
@@ -1192,6 +1189,7 @@ describe("CrudService persistence field mapping", () => {
 	it("fails closed before mutation when generated values lack a persistence mapper", async () => {
 		const resource = defineCrudResource({
 			name: "unmapped-scope-users",
+			fields: ["id", "name", "tenantId"],
 			path: "unmapped-scope-users",
 			itemPath: ":id",
 			idFields: { id: "id" },
@@ -1207,7 +1205,6 @@ describe("CrudService persistence field mapping", () => {
 		const binding = defineCrudBinding({
 			resource,
 			adapter: { useValue: adapter },
-			fields: ["id", "name"],
 			mappings: {
 				create: (input) => input,
 				update: (input) => input,
@@ -1242,7 +1239,6 @@ describe("CrudService persistence field mapping", () => {
 		const binding = defineCrudBinding({
 			resource: userResource,
 			adapter: { useValue: adapter },
-			fields: ["id", "name", "tenantId", "deletedAt"],
 			mappings: {
 				create: (input) => ({ name: input.name, tenantId: "tenant-a", deletedAt: null }),
 				update: (input) => input,
@@ -1272,6 +1268,7 @@ describe("CrudService persistence field mapping", () => {
 	it("maps scoped and soft-delete logical values before every adapter write", async () => {
 		const resource = defineCrudResource({
 			name: "aliased-users",
+			fields: ["id", "name", "tenantId", "deletedAt"],
 			path: "aliased-users",
 			itemPath: ":id",
 			idFields: { id: "id" },
@@ -1303,7 +1300,6 @@ describe("CrudService persistence field mapping", () => {
 		const binding = defineCrudBinding({
 			resource,
 			adapter: { useValue: adapter },
-			fields: ["id", "name", "tenantId", "deletedAt"],
 			mappings: {
 				create: (input) => ({ display_name: input.name, removed_on: null }),
 				update: (input) => (input.name === undefined ? {} : { display_name: input.name }),
@@ -1387,6 +1383,7 @@ describe("CrudService bounded relations", () => {
 });
 
 const viewerBindingResource = defineCrudResource({
+	fields: ["artifactId", "viewerUserId", "serverId", "alias", "toolPrefix", "visible"],
 	name: "viewer-bindings",
 	path: "viewer-bindings",
 	itemPath: ":artifactId/:serverId",
@@ -1419,7 +1416,6 @@ function createViewerBinding(
 	return defineCrudBinding({
 		resource: viewerBindingResource,
 		adapter: { useValue: adapter },
-		fields: ["artifactId", "serverId"],
 		scopeCreateFields: ["viewerUserId"],
 		...(options.configure === false
 			? {}
@@ -1489,6 +1485,7 @@ function createViewerBindingService(
 }
 
 const nestedChildResource = defineCrudResource({
+	fields: ["parentId", "id", "name"],
 	name: "nested-children",
 	path: "parents/:parentId/children",
 	itemPath: ":id",
@@ -1518,7 +1515,6 @@ function createNestedChildService(
 	const binding = defineCrudBinding({
 		resource: nestedChildResource,
 		adapter: { useValue: adapter },
-		fields: ["parentId", "id", "name"],
 		scopeCreateFields: ["parentId"],
 		mappings: {
 			create: (input) => input,
@@ -1548,6 +1544,7 @@ function nestedChildResponse(record: Record<string, unknown>) {
 }
 
 const childResource = defineCrudResource({
+	fields: ["id", "parentId", "name"],
 	name: "children",
 	path: "children",
 	itemPath: ":id",
@@ -1563,6 +1560,7 @@ const childResource = defineCrudResource({
 });
 
 const cursorResource = defineCrudResource({
+	fields: ["id", "rank"],
 	name: "cursor-records",
 	path: "cursor-records",
 	itemPath: ":id",
@@ -1585,7 +1583,6 @@ function createCursorService(records: readonly Record<string, unknown>[]) {
 	const binding = defineCrudBinding({
 		resource: cursorResource,
 		adapter: { useValue: adapter },
-		fields: ["id", "rank"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
@@ -1609,6 +1606,7 @@ function createCursorService(records: readonly Record<string, unknown>[]) {
 }
 
 const parentResource = defineCrudResource({
+	fields: ["id", "name"],
 	name: "parents",
 	path: "parents",
 	itemPath: ":id",
@@ -1643,7 +1641,6 @@ function createRelationServices(children: readonly Record<string, unknown>[]) {
 	const childBinding = defineCrudBinding({
 		resource: childResource,
 		adapter: { useValue: childAdapter },
-		fields: ["id", "parentId", "name"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,
@@ -1658,7 +1655,6 @@ function createRelationServices(children: readonly Record<string, unknown>[]) {
 	const parentBinding = defineCrudBinding({
 		resource: parentResource,
 		adapter: { useValue: parentAdapter },
-		fields: ["id", "name"],
 		mappings: {
 			create: (input) => input,
 			update: (input) => input,

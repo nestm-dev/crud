@@ -19,6 +19,7 @@ import { crudOperations } from "../src/resource/operations.ts";
 import { CRUD_QUERY_OPENAPI_EXTENSION } from "../src/swagger-ui/query-extension.ts";
 
 const routeResource = defineCrudResource({
+	fields: ["tenantId", "id", "name", "deletedAt"],
 	name: "billing-items",
 	path: "/api/billing-items/",
 	itemPath: ":tenantId/:id",
@@ -41,6 +42,7 @@ const routeResource = defineCrudResource({
 });
 
 const nestedRouteResource = defineCrudResource({
+	fields: ["artifactId", "versionId", "name", "active"],
 	name: "artifact-versions",
 	path: "/api/artifacts/:artifactId/versions/",
 	itemPath: ":versionId",

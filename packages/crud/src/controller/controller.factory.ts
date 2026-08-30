@@ -32,6 +32,7 @@ import type {
 	CrudCreate,
 	CrudId,
 	CrudPathParams,
+	CrudRelationName,
 	CrudUpdate,
 	CrudUpsert,
 } from "../resource/resource.types.ts";
@@ -471,7 +472,10 @@ function collectionArguments<Resource extends AnyCrudResource>(
 	return args as unknown as CrudCollectionArgs<Resource>;
 }
 
-function readIncludes(resource: AnyCrudResource, query: CrudRawQuery): readonly string[] {
+function readIncludes<Resource extends AnyCrudResource>(
+	resource: Resource,
+	query: CrudRawQuery,
+): readonly CrudRelationName<Resource>[] {
 	let raw: unknown;
 	if (query instanceof URLSearchParams) {
 		for (const key of query.keys()) {
@@ -503,5 +507,5 @@ function readIncludes(resource: AnyCrudResource, query: CrudRawQuery): readonly 
 	if (new Set(includes).size !== includes.length) {
 		throw new BadRequestException("The include query parameter contains a repeated relation.");
 	}
-	return includes;
+	return includes as unknown as readonly CrudRelationName<Resource>[];
 }

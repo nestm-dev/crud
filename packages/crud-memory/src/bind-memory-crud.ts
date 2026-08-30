@@ -6,6 +6,7 @@ import {
 	type CrudBindingMappings,
 	type CompleteCrudFieldSelection,
 	type DefineCrudBindingOptions,
+	type CrudPersistenceField,
 	type CrudScopeCreateField,
 	type CrudResourceBinding,
 	type CrudValues,
@@ -18,15 +19,18 @@ type MemoryCrudResource = CrudResourceBinding["resource"];
 interface BindMemoryCrudOptionsBase<
 	Resource extends MemoryCrudResource,
 	RecordType = CrudValues,
-	Fields extends readonly string[] = readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
 	ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[] =
 		readonly [],
-> extends MemoryCrudAdapterOptions<RecordType, CreateValues, UpdateValues> {
+> extends MemoryCrudAdapterOptions<
+	RecordType,
+	CreateValues,
+	UpdateValues,
+	NoInfer<Resource["fields"][number]>
+> {
 	readonly resource: Resource;
 	readonly imports?: ModuleMetadata["imports"];
-	readonly fields: Fields;
 	readonly mappings: CrudBindingMappings<
 		Resource,
 		NoInfer<RecordType>,
@@ -37,34 +41,31 @@ interface BindMemoryCrudOptionsBase<
 	/** Insert fields supplied by path parameters or CRUD scopes through `mappings.scopeCreate`. */
 	readonly scopeCreateFields?: ScopeCreateFields;
 	/** Atomic-upsert persistence fields. The configured adapter must advertise that capability. */
-	readonly upsert?: CrudBindingUpsertOptions;
+	readonly upsert?: CrudBindingUpsertOptions<CrudPersistenceField<CreateValues>>;
 	/** Overrides the convenient package-owned adapter with any standard Nest provider form. */
-	readonly adapter?: CrudAdapterProvider<RecordType, CreateValues, UpdateValues>;
+	readonly adapter?: CrudAdapterProvider<
+		RecordType,
+		CreateValues,
+		UpdateValues,
+		CrudPersistenceField<CreateValues>,
+		Resource["fields"][number]
+	>;
 }
 
 export type BindMemoryCrudOptions<
 	Resource extends MemoryCrudResource,
 	RecordType = CrudValues,
-	Fields extends readonly string[] = readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
 	ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[] =
 		readonly [],
-> = BindMemoryCrudOptionsBase<
-	Resource,
-	RecordType,
-	Fields,
-	CreateValues,
-	UpdateValues,
-	ScopeCreateFields
-> &
-	CompleteCrudFieldSelection<Resource, Fields>;
+> = BindMemoryCrudOptionsBase<Resource, RecordType, CreateValues, UpdateValues, ScopeCreateFields> &
+	CompleteCrudFieldSelection<Resource, Resource["fields"][number]>;
 
 /** Creates a core binding without installing or owning any external dependency. */
 export function bindMemoryCrud<
 	const Resource extends MemoryCrudResource,
 	RecordType = CrudValues,
-	const Fields extends readonly string[] = readonly string[],
 	CreateValues extends object = object,
 	UpdateValues extends object = object,
 	const ScopeCreateFields extends readonly CrudScopeCreateField<CreateValues, UpdateValues>[] =
@@ -73,7 +74,6 @@ export function bindMemoryCrud<
 	options: BindMemoryCrudOptions<
 		Resource,
 		RecordType,
-		Fields,
 		CreateValues,
 		UpdateValues,
 		ScopeCreateFields
@@ -81,15 +81,15 @@ export function bindMemoryCrud<
 ): CrudResourceBinding<
 	Resource,
 	RecordType,
-	Fields,
 	CreateValues,
 	UpdateValues,
-	ScopeCreateFields[number]
+	ScopeCreateFields[number],
+	CrudPersistenceField<CreateValues>,
+	Resource["fields"][number]
 > {
 	const {
 		resource,
 		imports,
-		fields,
 		mappings,
 		scopeCreateFields,
 		upsert,
@@ -103,8 +103,19 @@ export function bindMemoryCrud<
 		unique,
 	} = options;
 
-	const resolvedAdapter: CrudAdapterProvider<RecordType, CreateValues, UpdateValues> = adapter ?? {
-		useValue: new MemoryCrudAdapter<RecordType, CreateValues, UpdateValues>({
+	const resolvedAdapter: CrudAdapterProvider<
+		RecordType,
+		CreateValues,
+		UpdateValues,
+		CrudPersistenceField<CreateValues>,
+		Resource["fields"][number]
+	> = adapter ?? {
+		useValue: new MemoryCrudAdapter<
+			RecordType,
+			CreateValues,
+			UpdateValues,
+			Resource["fields"][number]
+		>({
 			...(store === undefined ? {} : { store }),
 			...(initialRecords === undefined ? {} : { initialRecords }),
 			...(clone === undefined ? {} : { clone }),
@@ -118,7 +129,6 @@ export function bindMemoryCrud<
 	const coreOptions = {
 		resource,
 		...(imports === undefined ? {} : { imports }),
-		fields,
 		mappings,
 		...(scopeCreateFields === undefined ? {} : { scopeCreateFields }),
 		...(upsert === undefined ? {} : { upsert }),
@@ -126,17 +136,19 @@ export function bindMemoryCrud<
 	} as unknown as DefineCrudBindingOptions<
 		Resource,
 		RecordType,
-		Fields,
 		CreateValues,
 		UpdateValues,
-		ScopeCreateFields
+		ScopeCreateFields,
+		CrudPersistenceField<CreateValues>,
+		Resource["fields"][number]
 	>;
 	return defineCrudBinding<
 		Resource,
 		RecordType,
-		Fields,
 		CreateValues,
 		UpdateValues,
-		ScopeCreateFields
+		ScopeCreateFields,
+		CrudPersistenceField<CreateValues>,
+		Resource["fields"][number]
 	>(coreOptions);
 }
