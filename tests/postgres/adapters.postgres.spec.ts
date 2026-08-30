@@ -292,11 +292,7 @@ async function initializeHarnesses(pgUrl: string): Promise<void> {
 						// issue `SET TRANSACTION READ ONLY`, and it has to be the first statement.
 						const queryRunner = typeOrmDataSource.createQueryRunner();
 						await queryRunner.connect();
-						await queryRunner.startTransaction(
-							runnerContext.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead
-								? "REPEATABLE READ"
-								: "READ COMMITTED",
-						);
+						await queryRunner.startTransaction(runnerContext.isolationLevel);
 						try {
 							if (runnerContext.accessMode === "read only") {
 								await queryRunner.query("SET TRANSACTION READ ONLY");
@@ -346,11 +342,7 @@ async function initializeHarnesses(pgUrl: string): Promise<void> {
 					run: async (runnerContext, workWithTransaction) => {
 						const queryRunner = typeOrmDataSource.createQueryRunner();
 						await queryRunner.connect();
-						await queryRunner.startTransaction(
-							runnerContext.isolationLevel === TypeOrmCrudTransactionIsolationLevel.RepeatableRead
-								? "REPEATABLE READ"
-								: "READ COMMITTED",
-						);
+						await queryRunner.startTransaction(runnerContext.isolationLevel);
 						try {
 							const rows: unknown = await queryRunner.query("SHOW transaction_isolation");
 							const first = Array.isArray(rows) ? rows[0] : undefined;
@@ -1138,7 +1130,7 @@ describe.skipIf(skipPostgres)("PostgreSQL adapter conformance", () => {
 		expect(runnerContexts).toHaveLength(3);
 		expect(runnerContexts[0]).toMatchObject({
 			accessMode: "read only",
-			isolationLevel: "repeatable read",
+			isolationLevel: "REPEATABLE READ",
 			mustOwnCommit: false,
 		});
 		expect(runnerContexts[1]).toMatchObject({ mustOwnCommit: true });
