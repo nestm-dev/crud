@@ -219,6 +219,15 @@ export class CrudService<
 						{
 							...(predicate === undefined ? {} : { predicate }),
 							order: query.order,
+							...(query.search === undefined || this.resource.query?.search?.fullText === undefined
+								? {}
+								: {
+										fullText: {
+											...this.resource.query.search.fullText,
+											fields: this.resource.query.search.fields,
+											query: query.search,
+										},
+									}),
 							...(query.mode === "offset" ? { offset: (query.page - 1) * query.limit } : {}),
 							limit: query.mode === "cursor" ? query.limit + 1 : query.limit,
 							count: query.mode === "offset",
@@ -665,7 +674,8 @@ export class CrudService<
 	}
 
 	private searchPredicate(search: string | undefined): CrudPredicate | undefined {
-		if (search === undefined) return undefined;
+		if (search === undefined || this.resource.query?.search?.fullText !== undefined)
+			return undefined;
 		return orCrudPredicates(
 			...(this.resource.query?.search?.fields ?? []).map((field) => ({
 				kind: "comparison" as const,
@@ -1189,8 +1199,17 @@ export class CrudService<
 				}
 			}
 		}
+		if (
+			this.resource.query?.search?.fullText !== undefined &&
+			this.adapter.capabilities.fullTextSearch !== true
+		) {
+			throw new TypeError(
+				`CRUD adapter for "${this.resource.name}" lacks full-text search support.`,
+			);
+		}
 		const needsInsensitive =
-			(this.resource.query?.search?.fields.length ?? 0) > 0 ||
+			(this.resource.query?.search?.fullText === undefined &&
+				(this.resource.query?.search?.fields.length ?? 0) > 0) ||
 			Object.values(this.resource.query?.filters ?? {}).some(({ operators }) =>
 				operators.includes("icontains"),
 			);

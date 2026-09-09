@@ -33,8 +33,27 @@ export interface CrudSortConfig<Field extends string = string> {
 	readonly cursor?: readonly Field[];
 }
 
+export type CrudFullTextWeight = "A" | "B" | "C" | "D";
+
+/** Server-owned full-text policy; clients supply only the search text. */
+export interface CrudFullTextSearchOptions<Field extends string = string> {
+	readonly configuration?: string;
+	readonly weights?: Readonly<Partial<Record<Field, CrudFullTextWeight>>>;
+	readonly queryMode?: "plain" | "websearch" | "prefix";
+	/** Rank this field's matches before matches confined to other fields. */
+	readonly primaryField?: Field;
+}
+
+export interface CrudFullTextSearchInput<
+	Field extends string = string,
+> extends CrudFullTextSearchOptions<Field> {
+	readonly fields: readonly Field[];
+	readonly query: string;
+}
+
 export interface CrudSearchConfig<Field extends string = string> {
 	readonly fields: readonly Field[];
+	readonly fullText?: CrudFullTextSearchOptions<Field>;
 	readonly minLength?: number;
 	readonly maxLength?: number;
 }

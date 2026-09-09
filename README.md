@@ -590,7 +590,7 @@ Swagger metadata, and four adapters. The broader
 is a staged roadmap, not an alpha release gate.
 
 Batch operations, bulk patch, optimistic concurrency,
-aggregates, full-text search, sparse fieldsets, import/export, computed fields,
+aggregates, sparse fieldsets, import/export, computed fields,
 audit history, record versioning, GraphQL, microservices, and schematics are
 deferred. Cache, rate limiting, idempotency, logging/events/webhooks,
 observability, encryption, approvals, health checks, and MCP remain separate

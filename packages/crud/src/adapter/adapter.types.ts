@@ -1,7 +1,7 @@
 import type { ExecutionContext } from "@nestjs/common";
 
 import type { CrudOperationName } from "../resource/operations.ts";
-import type { CrudOrder, CrudPredicate } from "../query/query.types.ts";
+import type { CrudFullTextSearchInput, CrudOrder, CrudPredicate } from "../query/query.types.ts";
 
 export type CrudValues = Readonly<Record<string, unknown>>;
 
@@ -24,6 +24,7 @@ export interface CrudAdapterCapabilities {
 	readonly returning: boolean;
 	readonly compositeIds: boolean;
 	readonly containsInsensitive: boolean;
+	readonly fullTextSearch?: boolean;
 	/** Whether this adapter implements the atomic upsert contract. */
 	readonly upsert?: boolean;
 }
@@ -48,6 +49,7 @@ export interface CrudFindOneInput<QueryField extends string = string> {
 }
 
 export interface CrudFindManyInput<QueryField extends string = string> {
+	readonly fullText?: CrudFullTextSearchInput<QueryField>;
 	readonly predicate?: CrudPredicate<QueryField>;
 	readonly order: readonly CrudOrder<QueryField>[];
 	readonly offset?: number;

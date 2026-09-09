@@ -1,3 +1,4 @@
+import { assertCrudFullTextSearchOptions } from "../query/full-text-search.ts";
 import { CRUD_FILTER_OPERATORS } from "../query/query.types.ts";
 import { resolveCrudPaginationModes } from "../query/pagination.ts";
 import { getCrudSchema, type CrudSchemaSource } from "../schema/schema.types.ts";
@@ -272,6 +273,16 @@ function snapshotQuery(query: CrudQueryConfig): CrudQueryConfig {
 					search: Object.freeze({
 						...query.search,
 						fields: Object.freeze([...query.search.fields]),
+						...(query.search.fullText === undefined
+							? {}
+							: {
+									fullText: Object.freeze({
+										...query.search.fullText,
+										...(query.search.fullText.weights === undefined
+											? {}
+											: { weights: Object.freeze({ ...query.search.fullText.weights }) }),
+									}),
+								}),
 					}),
 				}),
 		...(query.pagination === undefined
@@ -451,6 +462,8 @@ function assertQueryConfiguration(definition: CrudResourceDefinition): void {
 			assertDeclaredField(definition, "query.search.fields", field);
 		}
 		assertUnique(name, "search.fields", search.fields);
+		if (search.fullText !== undefined)
+			assertCrudFullTextSearchOptions(search.fields, search.fullText);
 		if (search.fields.length === 0) {
 			throw new TypeError(`CRUD resource "${name}" search.fields cannot be empty.`);
 		}

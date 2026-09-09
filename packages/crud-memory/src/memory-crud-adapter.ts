@@ -415,6 +415,9 @@ export class MemoryCrudAdapter<
 		input: CrudFindManyInput<Field>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<RecordType>> {
+		if (input.fullText !== undefined) {
+			throw new CrudAdapterError("unsupported", "This adapter does not support full-text search.");
+		}
 		const records = this.#recordsFor(context)
 			.filter(
 				(record) =>

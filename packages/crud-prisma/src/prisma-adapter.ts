@@ -278,6 +278,9 @@ export class PrismaCrudAdapter<
 		input: CrudFindManyInput<PrismaCrudLogicalField<RecordType, Fields>>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<RecordType>> {
+		if (input.fullText !== undefined) {
+			throw new CrudAdapterError("unsupported", "This adapter does not support full-text search.");
+		}
 		try {
 			const delegate = this.#delegate(context);
 			const where = input.predicate

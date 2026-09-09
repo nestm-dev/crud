@@ -130,7 +130,48 @@ NestJS 12. `createCrudAdapterConformanceCases` and
 `InsecureCrudCursorCodec` must never be used outside tests.
 
 The alpha intentionally defers batch/bulk writes, optimistic
-concurrency, aggregates/full-text search, sparse fieldsets, import/export,
+concurrency, aggregates, sparse fieldsets, import/export,
 audit/version history, GraphQL, microservices, and schematics. The broader
 [hono-crud feature set](https://github.com/kshdotdev/hono-crud/blob/80de807d7c18691b7ddedf6ccca6db47b5cb1b57/README.md#features)
 is a staged roadmap.
+
+## Full-text search
+
+Resources opt in with `query.search.fullText`. PostgreSQL TypeORM currently
+implements this capability; Memory, Drizzle, and Prisma reject it explicitly.
+Existing resources without `fullText` keep literal case-insensitive substring search.
+
+```ts
+query: {
+  search: {
+    fields: ["title", "description"],
+    maxLength: 120,
+    fullText: {
+      configuration: "simple",
+      queryMode: "prefix",
+      weights: { title: "A", description: "D" },
+      primaryField: "title",
+    },
+  },
+  pagination: { offset: true },
+}
+```
+
+The client still sends only `search=...`. Field policy, language configuration,
+weights, and query syntax are server-owned. `plain` (default) matches all normalized
+words, `websearch` supports quoted phrases, OR and exclusions, and `prefix` matches
+all normalized word prefixes in any order for type-ahead interfaces. Empty or
+punctuation-only normalized queries match no rows. These are token searches, not
+arbitrary substrings. `simple` (default) handles case without language-specific
+stemming; applications may select a PostgreSQL configuration such as `english`.
+
+Weights A through D affect relevance. Optional `primaryField` places exact text,
+text prefixes, and full-text matches in that field ahead of other-field-only matches.
+Relevance follows that priority, then the normal deterministic resource sort.
+Filtering, authorization, counts, ranking, and pagination all execute in the database
+inside the ordinary CRUD read transaction. Rank-ordered search requires offset
+pagination; a full-text search with a cursor is rejected because cursors do not
+encode relevance scores. The resource may still use cursor pagination without search.
+
+See the TypeORM adapter's [full-text query and index helpers](../crud-typeorm#full-text-search)
+for integrating custom read repositories and consumer-owned GIN indexes.
