@@ -1,5 +1,14 @@
 # @nestm/crud
 
+## 0.1.0-alpha.16
+
+### Patch Changes
+
+- 12d9acd: Add opt-in PostgreSQL full-text search with weighted fields, primary-field ranking,
+  plain/websearch/prefix query modes, and offset pagination. Export the TypeORM search
+  and vector compilers for custom repositories and consumer-owned GIN indexes. Reject
+  unsupported adapters and rank-ordered cursor queries instead of silently falling back.
+
 ## 0.1.0-alpha.15
 
 ### Minor Changes
