@@ -51,7 +51,7 @@
 		"@prisma/adapter-pg": "7.10.0",
 		"@prisma/client": "7.10.0",
 		"@standard-schema/spec": "1.1.0",
-		"@types/node": "26.4.0",
+		"@types/node": "26.4.1",
 		"@types/pg": "8.23.1",
 		"@types/supertest": "7.2.1",
 		"@vitest/coverage-v8": "4.1.11",
