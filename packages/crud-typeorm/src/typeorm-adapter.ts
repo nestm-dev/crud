@@ -27,6 +27,7 @@ import {
 } from "typeorm";
 import type { IsolationLevel } from "typeorm/driver/types/IsolationLevel.js";
 
+import { compileTypeOrmFullTextSearch } from "./typeorm-full-text-search.ts";
 import { compileTypeOrmPredicate } from "./typeorm-predicate.ts";
 
 type TypeOrmColumnMetadata = EntityMetadata["columns"][number];
@@ -842,6 +843,7 @@ export class TypeOrmCrudAdapter<
 > {
 	declare private readonly __logicalField: LogicalField;
 	readonly capabilities = Object.freeze({
+		fullTextSearch: true,
 		transactions: true,
 		returning: true,
 		compositeIds: true,
@@ -1063,6 +1065,23 @@ export class TypeOrmCrudAdapter<
 				async (repository, activeContext) => {
 					const query = this.#query(repository);
 					await this.#where(query, input.predicate, activeContext);
+					if (input.fullText !== undefined) {
+						const search = compileTypeOrmFullTextSearch(input.fullText, (field) =>
+							this.#fieldExpression(query, field),
+						);
+						for (const parameter of Object.keys(search.parameters)) {
+							if (Object.hasOwn(query.getParameters(), parameter))
+								throw new CrudAdapterError(
+									"unsupported",
+									`The TypeORM row predicate collides with reserved CRUD parameter '${parameter}'.`,
+								);
+						}
+						query.andWhere(search.sql, search.parameters);
+						for (const [index, order] of search.order.entries()) {
+							const alias = `crud_search_rank_${index}`;
+							query.addSelect(order.sql, alias).addOrderBy(alias, order.direction);
+						}
+					}
 					for (const order of input.order) {
 						query.addOrderBy(
 							this.#fieldExpression(query, order.field),

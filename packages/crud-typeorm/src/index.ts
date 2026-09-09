@@ -43,3 +43,9 @@ export {
 	type TypeOrmCompiledPredicate,
 	type TypeOrmFieldResolver,
 } from "./typeorm-predicate.ts";
+
+export {
+	compileTypeOrmFullTextSearch,
+	compileTypeOrmFullTextVector,
+	type TypeOrmCompiledFullTextSearch,
+} from "./typeorm-full-text-search.ts";

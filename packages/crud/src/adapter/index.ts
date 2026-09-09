@@ -37,6 +37,9 @@ export type {
 	CrudValues,
 } from "./adapter.types.ts";
 export type {
+	CrudFullTextSearchInput,
+	CrudFullTextSearchOptions,
+	CrudFullTextWeight,
 	CrudFilterOperator,
 	CrudOrder,
 	CrudPredicate,
@@ -48,3 +51,5 @@ export type {
 	CrudFactoryDependencyTuple,
 	CrudFactoryProvider,
 } from "../module/factory-provider.types.ts";
+
+export { assertCrudFullTextSearchOptions } from "../query/full-text-search.ts";

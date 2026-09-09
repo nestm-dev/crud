@@ -50,6 +50,17 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 	const order = buildCrudOrder(resource, readOptionalString(normalized, "sort"), pagination.mode);
 	const filters = await parseFilters(resource, normalized.filters);
 	const search = parseSearch(resource, normalized);
+	if (
+		search !== undefined &&
+		resource.query?.search?.fullText !== undefined &&
+		pagination.mode === "cursor"
+	) {
+		throw queryError(
+			"invalid_pagination",
+			"Full-text relevance search requires offset pagination.",
+			"after",
+		);
+	}
 	const includes = parseIncludes(resource, normalized);
 	const deleted = parseDeleted(resource, normalized);
 

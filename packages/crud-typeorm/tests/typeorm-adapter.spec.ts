@@ -249,6 +249,7 @@ describe("TypeOrmCrudAdapter construction", () => {
 			columns: COLUMNS,
 		});
 		expect(adapter.capabilities).toEqual({
+			fullTextSearch: true,
 			transactions: true,
 			returning: true,
 			compositeIds: true,

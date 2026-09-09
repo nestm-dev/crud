@@ -285,3 +285,46 @@ and unrecognized failures to a sanitized `500` without exposing the raw ORM
 error. The `0.1` alpha is not certified for non-PostgreSQL TypeORM drivers.
 
 License: BSD-3-Clause.
+
+## Full-text search
+
+`createTypeOrmCrudAdapter` implements CRUD's `fullTextSearch` capability using
+PostgreSQL `tsvector`, `tsquery`, and `ts_rank_cd`. It accepts the server-owned
+`CrudFindManyInput.fullText` plan produced by `CrudService`; structured and native
+row predicates remain mandatory alongside the search predicate. Search counts
+and rows share the counted read transaction. Rank projections are internal and
+are not returned as resource fields.
+
+Custom repositories with domain-specific joins or count projections can use the same
+compiler rather than recreating search SQL:
+
+```ts
+const search = compileTypeOrmFullTextSearch(
+	{
+		fields: ["title", "description"],
+		configuration: "simple",
+		queryMode: "prefix",
+		weights: { title: "A", description: "D" },
+		primaryField: "title",
+		query: searchText,
+	},
+	(field) => `artifact.${field}`,
+);
+query.andWhere(search.sql, search.parameters);
+for (const order of search.order) query.addOrderBy(order.sql, order.direction);
+query.addOrderBy("artifact.id", "ASC");
+```
+
+The field resolver receives only configured fields and must return trusted SQL
+identifiers, just like `compileTypeOrmPredicate`. The compiler binds user text in
+`crud_search_query`; callers must avoid parameter collisions. The adapter rejects
+native predicate collisions. Configuration names and weights are validated before
+compilation. Query syntax is fixed by policy; clients cannot supply SQL or raw tsquery.
+
+`compileTypeOrmFullTextVector(fields, policy, resolveField)` returns the identical
+weighted expression for a consumer-owned GIN expression index. Create that index in
+the application's migration using the same configuration, weights, and column
+resolver without table aliases. Rebuild it if that policy changes. The package never
+creates indexes, migrations, tables, or connections itself. Prefix, phrase, and plain
+queries can all use this expression index. PostgreSQL integration tests verify index
+compatibility, weighted ranking, scope predicates, counts, and pagination.

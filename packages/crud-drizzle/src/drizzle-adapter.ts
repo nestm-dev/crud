@@ -418,6 +418,9 @@ export class DrizzleCrudAdapter<
 		input: CrudFindManyInput<DrizzleCrudLogicalField<Columns>>,
 		context: CrudAdapterContext,
 	): Promise<CrudFindManyResult<InferSelectModel<Table>>> {
+		if (input.fullText !== undefined) {
+			throw new CrudAdapterError("unsupported", "This adapter does not support full-text search.");
+		}
 		try {
 			return await this.#withExecutor(
 				context,
