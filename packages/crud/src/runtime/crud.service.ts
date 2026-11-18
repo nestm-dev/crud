@@ -4,6 +4,7 @@ import {
 	HttpException,
 	InternalServerErrorException,
 	NotFoundException,
+	PreconditionFailedException,
 	UnprocessableEntityException,
 	type ExecutionContext,
 } from "@nestjs/common";
@@ -22,11 +23,24 @@ import type {
 	CrudScopeCreateField,
 } from "../adapter/binding.types.ts";
 import { encodeCrudCursor } from "../cursor/cursor.ts";
-import type { CrudCursorCodec } from "../cursor/cursor.types.ts";
+import type { CrudCursorCodec, CrudCursorFixedValue } from "../cursor/cursor.types.ts";
 import type { ResolvedCrudModuleOptions } from "../module/crud-module.options.ts";
 import { andCrudPredicates, orCrudPredicates } from "../query/predicate.ts";
+import {
+	parseCrudListSchema,
+	resolveCrudListRequest,
+	toCrudListRequest,
+} from "../query/list-request.ts";
 import { parseCrudListQuery } from "../query/query-parser.ts";
-import type { CrudListQuery, CrudPage, CrudPredicate, CrudRawQuery } from "../query/query.types.ts";
+import type {
+	CrudListQuery,
+	CrudListRequest,
+	CrudPage,
+	CrudPageMeta,
+	CrudPredicate,
+	CrudQueryParserOptions,
+	CrudRawQuery,
+} from "../query/query.types.ts";
 import type { CrudRelationConfig } from "../relation/relation.types.ts";
 import type {
 	AnyCrudResource,
@@ -34,6 +48,7 @@ import type {
 	CrudField,
 	CrudFieldValues,
 	CrudId,
+	CrudListMeta,
 	CrudPathParams,
 	CrudRelationName,
 	CrudResponseInput,
@@ -53,6 +68,16 @@ import type {
 	CrudValidationContext,
 } from "./runtime.types.ts";
 import type { CrudRegistry } from "./crud-registry.ts";
+import {
+	crudVersionTag,
+	formatCrudEntityTag,
+	nextCrudVersion,
+	readCrudWritePreconditions,
+	resolveCrudWritePrecondition,
+	setCrudResponseHeader,
+	type CrudResolvedPrecondition,
+	type CrudWritePreconditions,
+} from "./concurrency.ts";
 import {
 	EMPTY_CRUD_FACTS,
 	resolveCrudFacts,
@@ -133,6 +158,7 @@ export class CrudService<
 	): Promise<CrudResponseInput<Resource>> {
 		const { executionContext, pathParams } = this.collectionArguments(args);
 		let committed: MutationResult<Resource> | undefined;
+		let entityTag: string | undefined;
 		const result = await this.runAdapter(async () =>
 			this.adapter.transaction(
 				async (session) => {
@@ -175,6 +201,7 @@ export class CrudService<
 						await hook.afterCreate?.(record, context);
 					}
 					const response = await this.mapRecord(record, {}, context);
+					entityTag = this.entityTag(record);
 					committed = { response };
 					return response;
 				},
@@ -183,22 +210,80 @@ export class CrudService<
 				),
 			),
 		);
+		this.setEntityTag(executionContext, entityTag);
 		await this.emitAfterCommit("create", committed, executionContext, pathParams);
 		return result;
 	}
 
+	/**
+	 * Lists records from a raw HTTP query object.
+	 *
+	 * A resource without `query.schema` parses the bracket grammar. A resource with
+	 * `query.schema` validates the raw query with that schema, maps it with `query.toListQuery`,
+	 * and continues as {@link listQuery}. A query already validated by `@Query({ schema })`
+	 * must go to `listQuery(toCrudListRequest(resource, parsed))` instead, because validating a
+	 * transformed value a second time is not generally possible.
+	 */
 	async list(
 		rawQuery: CrudRawQuery,
 		...args: CrudCollectionArgs<Resource>
-	): Promise<CrudPage<CrudResponseInput<Resource>>> {
+	): Promise<CrudPage<CrudResponseInput<Resource>, CrudListMeta<Resource>>> {
+		if (this.resource.query?.schema !== undefined) {
+			const parsed = await parseCrudListSchema(this.resource, rawQuery);
+			return this.listQuery(toCrudListRequest(this.resource, parsed), ...args);
+		}
 		const { executionContext, pathParams } = this.collectionArguments(args);
 		const pathFixedValues = this.pathFixedValues(pathParams);
 		const query = await parseCrudListQuery(this.resource, rawQuery, {
+			...this.listQueryOptions(pathFixedValues),
+		});
+		return this.executeList(query, pathFixedValues, executionContext, pathParams);
+	}
+
+	/**
+	 * Lists records from a parser-independent request, skipping every query grammar.
+	 *
+	 * The request is validated against the resource policy (declared fields, the sort whitelist,
+	 * pagination bounds, includes, soft-delete visibility) and then runs under the same path,
+	 * scope, soft-delete, and transaction rules as {@link list}.
+	 */
+	async listQuery(
+		request: CrudListRequest<CrudField<Resource>, CrudRelationName<Resource>>,
+		...args: CrudCollectionArgs<Resource>
+	): Promise<CrudPage<CrudResponseInput<Resource>, CrudListMeta<Resource>>> {
+		const { executionContext, pathParams } = this.collectionArguments(args);
+		const pathFixedValues = this.pathFixedValues(pathParams);
+		const query = await resolveCrudListRequest(
+			this.resource,
+			request,
+			this.listQueryOptions(pathFixedValues),
+		);
+		return this.executeList(query, pathFixedValues, executionContext, pathParams);
+	}
+
+	private listQueryOptions(
+		pathFixedValues: readonly { readonly field: string; readonly value: unknown }[],
+	): CrudQueryParserOptions<CrudField<Resource>> {
+		return {
 			...(this.cursorCodec === undefined ? {} : { cursorCodec: this.cursorCodec }),
-			...(pathFixedValues.length === 0 ? {} : { cursorFixedValues: pathFixedValues }),
+			...(pathFixedValues.length === 0
+				? {}
+				: {
+						cursorFixedValues: pathFixedValues as readonly CrudCursorFixedValue<
+							CrudField<Resource>
+						>[],
+					}),
 			defaultLimit: this.options.pagination.defaultLimit,
 			maxLimit: this.options.pagination.maxLimit,
-		});
+		};
+	}
+
+	private async executeList(
+		query: CrudListQuery,
+		pathFixedValues: readonly { readonly field: string; readonly value: unknown }[],
+		executionContext: ExecutionContext | undefined,
+		pathParams: CrudPathParams<Resource> | undefined,
+	): Promise<CrudPage<CrudResponseInput<Resource>, CrudListMeta<Resource>>> {
 		return this.runAdapter(() =>
 			this.adapter.transaction(
 				async (session) => {
@@ -260,15 +345,15 @@ export class CrudService<
 						const totalPages = Math.ceil(total / query.limit);
 						return {
 							data,
-							meta: {
-								mode: "offset" as const,
+							meta: this.formatPageMeta({
+								mode: "offset",
 								page: query.page,
 								limit: query.limit,
 								total,
 								totalPages,
 								hasNextPage: query.page < totalPages,
 								hasPreviousPage: query.page > 1,
-							},
+							}),
 						};
 					}
 
@@ -279,7 +364,12 @@ export class CrudService<
 							: null;
 					return {
 						data,
-						meta: { mode: "cursor" as const, limit: query.limit, nextCursor, hasNextPage },
+						meta: this.formatPageMeta({
+							mode: "cursor",
+							limit: query.limit,
+							nextCursor,
+							hasNextPage,
+						}),
 					};
 				},
 				this.adapterContext(this.operationContext("list", executionContext, undefined, pathParams)),
@@ -293,7 +383,8 @@ export class CrudService<
 		includes: readonly CrudRelationName<Resource>[] = [],
 	): Promise<CrudResponseInput<Resource>> {
 		const pathParams = this.pathParamsFromId(id);
-		return this.runAdapter(() =>
+		let entityTag: string | undefined;
+		const result = await this.runAdapter(() =>
 			this.adapter.transaction(
 				async (session) => {
 					const baseContext = this.operationContext("read", executionContext, session, pathParams);
@@ -311,20 +402,30 @@ export class CrudService<
 					if (record === null) throw this.notFound();
 					const relations =
 						(await this.loadRelations([record], includes, executionContext))[0] ?? {};
+					entityTag = this.entityTag(record);
 					return this.mapRecord(record, relations, context);
 				},
 				this.adapterContext(this.operationContext("read", executionContext, undefined, pathParams)),
 			),
 		);
+		this.setEntityTag(executionContext, entityTag);
+		return result;
 	}
 
+	/**
+	 * Updates one record. With `concurrency` configured, the write requires a matching
+	 * `If-Match` (from `preconditions`, else the HTTP request): absent → 428, stale → 412.
+	 */
 	async update(
 		id: CrudId<Resource>,
 		input: CrudUpdate<Resource>,
 		executionContext?: ExecutionContext,
+		preconditions?: CrudWritePreconditions,
 	): Promise<CrudResponseInput<Resource>> {
 		const pathParams = this.pathParamsFromId(id);
+		const precondition = this.writePrecondition(executionContext, preconditions, false);
 		let committed: MutationResult<Resource> | undefined;
+		let entityTag: string | undefined;
 		const result = await this.runAdapter(() =>
 			this.adapter.transaction(
 				async (session) => {
@@ -340,8 +441,12 @@ export class CrudService<
 						this.normalRowsPredicate(),
 						scope.predicate,
 					)!;
-					const prior = await this.adapter.findOne({ predicate }, this.adapterContext(baseContext));
+					const prior = await this.adapter.findOne(
+						{ predicate, ...(precondition === undefined ? {} : { lock: true }) },
+						this.adapterContext(baseContext),
+					);
 					if (prior === null) throw this.notFound();
+					const versionGuard = this.versionGuard(prior, precondition);
 					const context: CrudOperationContext<Resource> = {
 						...baseContext,
 						facts: scope.facts,
@@ -359,10 +464,13 @@ export class CrudService<
 						);
 					}
 					const mapped = await this.binding.mappings.update(value);
-					const scoped = await this.mapPersistenceOverlay(scope.updateValues ?? {});
+					const scoped = await this.mapPersistenceOverlay({
+						...scope.updateValues,
+						...this.versionIncrement(prior),
+					});
 					const record = await this.adapter.update(
 						{
-							predicate,
+							predicate: andCrudPredicates(predicate, versionGuard)!,
 							values: normalizeCrudMappingValues<UpdateValues>({
 								...mapped,
 								...scoped,
@@ -370,9 +478,12 @@ export class CrudService<
 						},
 						this.adapterContext(context),
 					);
-					if (record === null) throw this.notFound();
+					if (record === null) {
+						throw versionGuard === undefined ? this.notFound() : this.preconditionFailed();
+					}
 					for (const hook of this.hooks) await hook.afterUpdate?.(record, context);
 					const response = await this.mapRecord(record, {}, context);
+					entityTag = this.entityTag(record);
 					committed = { response, prior };
 					return response;
 				},
@@ -381,15 +492,26 @@ export class CrudService<
 				),
 			),
 		);
+		this.setEntityTag(executionContext, entityTag);
 		await this.emitAfterCommit("update", committed, executionContext, pathParams);
 		return result;
 	}
 
+	/**
+	 * Atomically creates or replaces one record. With `concurrency` configured, PUT is
+	 * conditional: `If-Match` updates the current version (stale or missing row → 412), and
+	 * `If-None-Match: *` only creates (existing row → 412). Neither header → 428.
+	 */
 	async upsert(
 		id: CrudId<Resource>,
 		input: CrudUpsert<Resource>,
 		executionContext?: ExecutionContext,
+		preconditions?: CrudWritePreconditions,
 	): Promise<CrudResponseInput<Resource>> {
+		const precondition = this.writePrecondition(executionContext, preconditions, true);
+		if (precondition !== undefined) {
+			return this.conditionalUpsert(id, input, precondition, executionContext);
+		}
 		const pathParams = this.pathParamsFromId(id);
 		const adapter = this.adapter;
 		const mappings = this.binding.mappings;
@@ -465,9 +587,18 @@ export class CrudService<
 		return result;
 	}
 
-	async delete(id: CrudId<Resource>, executionContext?: ExecutionContext): Promise<void> {
+	/**
+	 * Deletes (or soft-deletes) one record. With `concurrency` configured, the write requires a
+	 * matching `If-Match`: absent → 428, stale → 412.
+	 */
+	async delete(
+		id: CrudId<Resource>,
+		executionContext?: ExecutionContext,
+		preconditions?: CrudWritePreconditions,
+	): Promise<void> {
 		const pathParams = this.pathParamsFromId(id);
 		const ignoreMissing = this.resource.operations.delete?.missing === "ignore";
+		const precondition = this.writePrecondition(executionContext, preconditions, false);
 		let committed: MutationResult<Resource> | undefined;
 		await this.runAdapter(() =>
 			this.adapter.transaction(
@@ -484,11 +615,16 @@ export class CrudService<
 						this.normalRowsPredicate(),
 						scope.predicate,
 					)!;
-					const prior = await this.adapter.findOne({ predicate }, this.adapterContext(baseContext));
+					const prior = await this.adapter.findOne(
+						{ predicate, ...(precondition === undefined ? {} : { lock: true }) },
+						this.adapterContext(baseContext),
+					);
 					if (prior === null) {
 						if (ignoreMissing) return;
 						throw this.notFound();
 					}
+					const versionGuard = this.versionGuard(prior, precondition);
+					const guarded = andCrudPredicates(predicate, versionGuard)!;
 					const context: CrudOperationContext<Resource> = {
 						...baseContext,
 						facts: scope.facts,
@@ -503,18 +639,20 @@ export class CrudService<
 					}
 					const record =
 						this.resource.softDelete === undefined
-							? await this.adapter.delete({ predicate }, this.adapterContext(context))
+							? await this.adapter.delete({ predicate: guarded }, this.adapterContext(context))
 							: await this.adapter.update(
 									{
-										predicate,
+										predicate: guarded,
 										values: await this.mapPersistenceValues({
 											[this.resource.softDelete.field]:
 												this.resource.softDelete.deleteValue?.(context) ?? new Date(),
+											...this.versionIncrement(prior),
 										}),
 									},
 									this.adapterContext(context),
 								);
 					if (record === null) {
+						if (versionGuard !== undefined) throw this.preconditionFailed();
 						if (ignoreMissing) return;
 						throw this.notFound();
 					}
@@ -539,6 +677,7 @@ export class CrudService<
 		const softDelete = this.resource.softDelete;
 		const pathParams = this.pathParamsFromId(id);
 		let committed: MutationResult<Resource> | undefined;
+		let entityTag: string | undefined;
 		const result = await this.runAdapter(() =>
 			this.adapter.transaction(
 				async (session) => {
@@ -571,6 +710,7 @@ export class CrudService<
 					const value = softDelete.restoreValue?.(context) ?? null;
 					const persistenceValues = await this.mapPersistenceValues({
 						[softDelete.field]: value,
+						...this.versionIncrement(prior),
 					});
 					const record = await this.adapter.update(
 						{ predicate, values: persistenceValues },
@@ -579,6 +719,7 @@ export class CrudService<
 					if (record === null) throw this.notFound();
 					for (const hook of this.hooks) await hook.afterRestore?.(record, context);
 					const response = await this.mapRecord(record, {}, context);
+					entityTag = this.entityTag(record);
 					committed = { response, prior };
 					return response;
 				},
@@ -587,8 +728,201 @@ export class CrudService<
 				),
 			),
 		);
+		this.setEntityTag(executionContext, entityTag);
 		await this.emitAfterCommit("restore", committed, executionContext, pathParams);
 		return result;
+	}
+
+	/**
+	 * Concurrency-enabled PUT. `If-None-Match: *` inserts a new row (the row must not exist);
+	 * `If-Match` rewrites the binding's `upsert.overwriteFields` of the current version under a
+	 * row lock and a version-guarded UPDATE, so the persistence layer bumps the version exactly
+	 * as it does for PATCH.
+	 */
+	private async conditionalUpsert(
+		id: CrudId<Resource>,
+		input: CrudUpsert<Resource>,
+		precondition: CrudResolvedPrecondition,
+		executionContext: ExecutionContext | undefined,
+	): Promise<CrudResponseInput<Resource>> {
+		const pathParams = this.pathParamsFromId(id);
+		const mappings = this.binding.mappings;
+		const config = this.binding.upsert;
+		if (mappings.upsert === undefined || config === undefined) {
+			throw new InternalServerErrorException(
+				`CRUD upsert for "${this.resource.name}" is not configured.`,
+			);
+		}
+		const mapUpsert = mappings.upsert.bind(mappings);
+		let committed: MutationResult<Resource> | undefined;
+		let entityTag: string | undefined;
+		const result = await this.runAdapter(() =>
+			this.adapter.transaction(
+				async (session) => {
+					const scopeContext = this.operationContext(
+						"upsert",
+						executionContext,
+						session,
+						pathParams,
+					);
+					const scope = await this.resolveScopes(scopeContext);
+					const context = this.mutationContext(
+						"upsert",
+						session,
+						scope.facts,
+						executionContext,
+						pathParams,
+					);
+					let record: RecordType | null;
+					if (precondition.kind === "create-only") {
+						// Any visible row with this identity, soft-deleted or not, fails the precondition.
+						const existing = await this.adapter.findOne(
+							{ predicate: andCrudPredicates(this.idPredicate(id), scope.predicate)! },
+							this.adapterContext(scopeContext),
+						);
+						if (existing !== null) throw this.preconditionFailed();
+						const value = await this.beforeUpsert(id, input, context);
+						const mapped = await mapUpsert(id, value);
+						const scoped = await this.mapScopeCreateValues(
+							this.scopeCreateValues(scope, pathParams),
+						);
+						this.assertScopeCreateFields(scoped);
+						const values = normalizeCrudCreateMappingValues<CreateValues, ScopeCreateField>({
+							...mapped,
+							...scoped,
+						});
+						record = await this.adapter.create({ values }, this.adapterContext(context));
+					} else {
+						const predicate = andCrudPredicates(
+							this.idPredicate(id),
+							this.normalRowsPredicate(),
+							scope.predicate,
+						)!;
+						const prior = await this.adapter.findOne(
+							{ predicate, lock: true },
+							this.adapterContext(scopeContext),
+						);
+						// RFC 9110: If-Match is false when the target has no current representation.
+						if (prior === null) throw this.preconditionFailed();
+						const versionGuard = this.versionGuard(prior, precondition);
+						const value = await this.beforeUpsert(id, input, context);
+						const mapped = await mapUpsert(id, value);
+						const overwrite = pickPersistencePaths(mapped, config.overwriteFields);
+						const scoped = await this.mapPersistenceOverlay(this.versionIncrement(prior));
+						// The overwrite subset of a proposed insert row is exactly the update the atomic
+						// upsert would apply on conflict; adapters accept it as their update values.
+						const values = normalizeCrudMappingValues<UpdateValues>({
+							...overwrite,
+							...scoped,
+						} as CrudMappingValues<UpdateValues>);
+						record = await this.adapter.update(
+							{ predicate: andCrudPredicates(predicate, versionGuard)!, values },
+							this.adapterContext(context),
+						);
+						if (record === null) throw this.preconditionFailed();
+					}
+					for (const hook of this.hooks) await hook.afterUpsert?.(record, context);
+					const response = await this.mapRecord(record, {}, context);
+					entityTag = this.entityTag(record);
+					committed = { response };
+					return response;
+				},
+				this.adapterContext(
+					this.operationContext("upsert", executionContext, undefined, pathParams),
+				),
+			),
+		);
+		this.setEntityTag(executionContext, entityTag);
+		await this.emitAfterCommit("upsert", committed, executionContext, pathParams);
+		return result;
+	}
+
+	private async beforeUpsert(
+		id: CrudId<Resource>,
+		input: CrudUpsert<Resource>,
+		context: CrudValidationContext<Resource, "upsert">,
+	): Promise<CrudUpsert<Resource>> {
+		let value = input;
+		for (const hook of this.hooks) {
+			if (hook.beforeUpsert !== undefined) value = await hook.beforeUpsert(id, value, context);
+		}
+		for (const validator of this.validators) {
+			await validator.validateUpsert?.(id, value, context);
+		}
+		return value;
+	}
+
+	/** Resolves the write precondition, or `undefined` when the resource has no concurrency. */
+	private writePrecondition(
+		executionContext: ExecutionContext | undefined,
+		explicit: CrudWritePreconditions | undefined,
+		allowCreateOnly: boolean,
+	): CrudResolvedPrecondition | undefined {
+		if (this.resource.concurrency === undefined) return undefined;
+		return resolveCrudWritePrecondition(
+			explicit ?? readCrudWritePreconditions(executionContext),
+			allowCreateOnly,
+		);
+	}
+
+	/**
+	 * Compares `If-Match` with the (locked) prior row and returns the predicate that pins the
+	 * write to that version, so a concurrent change still fails the UPDATE/DELETE with 412.
+	 */
+	private versionGuard(
+		prior: RecordType,
+		precondition: CrudResolvedPrecondition | undefined,
+	): CrudPredicate | undefined {
+		const concurrency = this.resource.concurrency;
+		if (concurrency === undefined || precondition === undefined) return undefined;
+		if (precondition.kind !== "match") {
+			throw new InternalServerErrorException("Unexpected create-only precondition.");
+		}
+		const version = this.adapter.getField(prior, concurrency.field);
+		const tag = crudVersionTag(version);
+		if (tag === undefined) {
+			throw new InternalServerErrorException(
+				`${this.resource.name} has no version in field "${concurrency.field}".`,
+			);
+		}
+		if (!precondition.tags.includes(tag)) throw this.preconditionFailed();
+		return { kind: "comparison", field: concurrency.field, operator: "eq", value: version };
+	}
+
+	/** CRUD-managed version bump, when `concurrency.increment` is enabled. */
+	private versionIncrement(prior: RecordType): CrudValues {
+		const concurrency = this.resource.concurrency;
+		if (concurrency?.increment !== true) return {};
+		return {
+			[concurrency.field]: nextCrudVersion(this.adapter.getField(prior, concurrency.field)),
+		};
+	}
+
+	private entityTag(record: RecordType): string | undefined {
+		const concurrency = this.resource.concurrency;
+		if (concurrency === undefined) return undefined;
+		const tag = crudVersionTag(this.adapter.getField(record, concurrency.field));
+		return tag === undefined ? undefined : formatCrudEntityTag(tag);
+	}
+
+	private setEntityTag(
+		executionContext: ExecutionContext | undefined,
+		entityTag: string | undefined,
+	): void {
+		if (entityTag !== undefined) setCrudResponseHeader(executionContext, "ETag", entityTag);
+	}
+
+	private formatPageMeta(meta: CrudPageMeta): CrudListMeta<Resource> {
+		const formatters = this.resource.query?.pagination?.meta;
+		const formatted =
+			meta.mode === "offset"
+				? formatters?.offset === undefined
+					? meta
+					: formatters.offset.format(meta)
+				: formatters?.cursor === undefined
+					? meta
+					: formatters.cursor.format(meta);
+		return formatted as CrudListMeta<Resource>;
 	}
 
 	/** Internal relation batching entry point. Target scopes and response mapping stay transactional. */
@@ -1098,6 +1432,12 @@ export class CrudService<
 		return new NotFoundException(`${this.resource.name} was not found.`);
 	}
 
+	private preconditionFailed(): PreconditionFailedException {
+		return new PreconditionFailedException(
+			`${this.resource.name} does not match If-Match; fetch the current version and retry.`,
+		);
+	}
+
 	private assertScopeCreateFields(
 		scoped: object,
 	): asserts scoped is Pick<CreateValues, ScopeCreateField> {
@@ -1126,6 +1466,7 @@ export class CrudService<
 		for (const field of this.resource.query?.sort?.fields ?? []) required.add(field);
 		for (const field of this.resource.query?.search?.fields ?? []) required.add(field);
 		for (const field of Object.values(this.resource.pathParams?.fields ?? {})) required.add(field);
+		if (this.resource.concurrency !== undefined) required.add(this.resource.concurrency.field);
 		for (const relation of Object.values(this.resource.relations ?? {})) {
 			for (const field of relation.local) required.add(field);
 		}
@@ -1154,6 +1495,14 @@ export class CrudService<
 		);
 		if (mutates && !this.adapter.capabilities.returning) {
 			throw new TypeError(`CRUD adapter for "${this.resource.name}" lacks returning mutations.`);
+		}
+		if (
+			this.resource.concurrency?.increment === true &&
+			this.binding.mappings.persistence === undefined
+		) {
+			throw new TypeError(
+				`CRUD binding for "${this.resource.name}" must define mappings.persistence to increment versions.`,
+			);
 		}
 		if (this.resource.softDelete !== undefined && this.binding.mappings.persistence === undefined) {
 			throw new TypeError(
@@ -1254,6 +1603,38 @@ function normalizeCrudCreateMappingValues<Values extends object, ScopeField exte
 ): Values;
 function normalizeCrudCreateMappingValues(values: object): object {
 	return normalizeCrudMappingValues(values);
+}
+
+/**
+ * Copies the given dotted persistence paths from a mapped row, preserving nesting, so an
+ * embedded path such as `address.city` stays `{ address: { city } }`.
+ */
+function pickPersistencePaths(values: object, paths: readonly string[]): Record<string, unknown> {
+	const picked: Record<string, unknown> = {};
+	for (const path of paths) {
+		const segments = path.split(".");
+		let source: unknown = values;
+		for (const segment of segments) {
+			source =
+				typeof source === "object" && source !== null && Object.hasOwn(source, segment)
+					? Reflect.get(source, segment)
+					: undefined;
+		}
+		if (source === undefined) continue;
+		let target = picked;
+		for (const segment of segments.slice(0, -1)) {
+			const next = Object.hasOwn(target, segment) ? target[segment] : undefined;
+			if (typeof next === "object" && next !== null) {
+				target = next as Record<string, unknown>;
+			} else {
+				const created: Record<string, unknown> = {};
+				target[segment] = created;
+				target = created;
+			}
+		}
+		target[segments.at(-1)!] = source;
+	}
+	return picked;
 }
 
 function uniqueTuples(tuples: readonly (readonly unknown[])[]): readonly (readonly unknown[])[] {

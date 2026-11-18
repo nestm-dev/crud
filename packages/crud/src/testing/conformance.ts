@@ -23,6 +23,20 @@ export interface CrudAdapterConformanceFixture<
 	/** IDs in the exact order produced by sorting `sortField` ascending. */
 	readonly expectedAscendingIds: readonly [unknown, unknown];
 	readonly getId: (record: RecordType) => unknown;
+	/**
+	 * Row-version column for adapters certified for optimistic concurrency. When present, the
+	 * kit checks that a locked `findOne` works inside a mutation transaction and that `update`
+	 * and `delete` honour a version predicate (a stale version affects nothing and returns null).
+	 */
+	readonly version?: CrudAdapterConformanceVersion<Field>;
+}
+
+export interface CrudAdapterConformanceVersion<Field extends string = string> {
+	readonly field: Field;
+	/** A value the stored version never takes, used as a stale `If-Match`. */
+	readonly stale: unknown;
+	/** Whether `update` itself advances the version (TypeORM `@VersionColumn`, a trigger). */
+	readonly bumpsOnUpdate: boolean;
 }
 
 export interface CrudAdapterConformanceCase<
@@ -143,6 +157,74 @@ export function createCrudAdapterConformanceCases<
 				assert(
 					(await fixture.adapter.delete({ predicate }, adapterContext("delete"))) === null,
 					"delete did not return null for a missing record.",
+				);
+			},
+		},
+		{
+			name: "pins updates and deletes to a locked row version",
+			run: async (fixture) => {
+				const version = fixture.version;
+				if (version === undefined) return;
+				const created = await fixture.adapter.create(
+					{ values: fixture.first },
+					adapterContext("create"),
+				);
+				const idPredicate = comparison(fixture.idField, "eq", fixture.getId(created));
+				const current = fixture.adapter.getField(created, version.field);
+				assert(current !== null && current !== undefined, "create did not return a version.");
+				const pinned = (value: unknown) => ({
+					kind: "and" as const,
+					predicates: [idPredicate, comparison(version.field, "eq", value)],
+				});
+
+				assert(
+					(await fixture.adapter.update(
+						{ predicate: pinned(version.stale), values: fixture.update },
+						adapterContext("update"),
+					)) === null,
+					"update with a stale version did not return null.",
+				);
+				assert(
+					(await fixture.adapter.delete(
+						{ predicate: pinned(version.stale) },
+						adapterContext("delete"),
+					)) === null,
+					"delete with a stale version did not return null.",
+				);
+
+				const context = adapterContext("update");
+				const updated = await fixture.adapter.transaction(async (session) => {
+					const locked = await fixture.adapter.findOne(
+						{ predicate: idPredicate, lock: true },
+						{ ...context, session },
+					);
+					assert(locked !== null, "locked findOne did not return the row.");
+					assertSame(
+						fixture.adapter.getField(locked, version.field),
+						current,
+						"locked findOne returned a different version.",
+					);
+					return fixture.adapter.update(
+						{ predicate: pinned(current), values: fixture.update },
+						{ ...context, session },
+					);
+				}, context);
+				assert(updated !== null, "update pinned to the current version returned null.");
+				const next = fixture.adapter.getField(updated, version.field);
+				if (version.bumpsOnUpdate) {
+					assert(!Object.is(next, current), "update did not advance the row version.");
+					assert(
+						(await fixture.adapter.delete(
+							{ predicate: pinned(current) },
+							adapterContext("delete"),
+						)) === null,
+						"delete pinned to a superseded version removed the row.",
+					);
+				}
+				assert(
+					(await fixture.adapter.delete({ predicate: pinned(next) }, adapterContext("delete"))) !==
+						null,
+					"delete pinned to the current version returned null.",
 				);
 			},
 		},

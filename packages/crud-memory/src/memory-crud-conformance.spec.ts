@@ -11,13 +11,14 @@ type ConformanceRecord = Readonly<Record<string, unknown>>;
 function createFixture(): CrudAdapterConformanceFixture<ConformanceRecord> {
 	return {
 		adapter: new MemoryCrudAdapter<ConformanceRecord>(),
-		first: { id: 1, rank: 20 },
-		second: { id: 2, rank: 10 },
+		first: { id: 1, rank: 20, version: 1 },
+		second: { id: 2, rank: 10, version: 1 },
 		update: { rank: 30 },
 		idField: "id",
 		sortField: "rank",
 		expectedAscendingIds: [2, 1],
 		getId: (record) => record.id,
+		version: { field: "version", stale: 99, bumpsOnUpdate: false },
 	};
 }
 

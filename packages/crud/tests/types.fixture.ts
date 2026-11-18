@@ -10,6 +10,7 @@ import {
 } from "../src/adapter/binding.types.ts";
 import { defineCrudFactoryProvider } from "../src/module/factory-provider.types.ts";
 import { defineCrudResource } from "../src/resource/define-resource.ts";
+import { andCrudPredicates } from "../src/query/predicate.ts";
 import type { CrudPredicate, CrudQueryConfig } from "../src/query/query.types.ts";
 import { crudOperations, type CrudOperations } from "../src/resource/operations.ts";
 import { CrudModule, type CrudModuleAsyncOptions } from "../src/module/crud.module.ts";
@@ -19,6 +20,7 @@ import type {
 	CrudCreate,
 	CrudField,
 	CrudId,
+	CrudListMeta,
 	CrudPathParams,
 	CrudResponse,
 	CrudUpdate,
@@ -612,6 +614,86 @@ export const typedServiceToken = getCrudServiceToken(typedResource);
 export type ServiceTokenResourceInference = Assert<
 	Equal<ServiceTokenResource<typeof typedServiceToken>, typeof typedResource>
 >;
+
+const ListTypedRecordsQuery = z.strictObject({
+	page: z.coerce.number().int().min(1).default(1),
+	label: z.string().optional(),
+});
+
+const schemaContractResource = defineCrudResource({
+	...typedResource,
+	name: "schema-contract",
+	path: "schema-contract",
+	query: {
+		schema: ListTypedRecordsQuery,
+		toListQuery: (query: z.output<typeof ListTypedRecordsQuery>) => ({
+			mode: "offset",
+			page: query.page,
+			...(query.label === undefined
+				? {}
+				: {
+						predicate: andCrudPredicates({
+							kind: "comparison",
+							field: "label",
+							operator: "eq",
+							value: query.label,
+						}),
+					}),
+		}),
+		pagination: {
+			offset: true,
+			meta: {
+				offset: {
+					schema: z.object({ totalItems: z.number() }),
+					format: (meta) => ({ totalItems: meta.total }),
+				},
+			},
+		},
+	},
+	concurrency: { field: "count" },
+});
+
+const formattedListMeta: CrudListMeta<typeof schemaContractResource> = { totalItems: 1 };
+const canonicalListMeta: CrudListMeta<typeof typedResource> = {
+	mode: "cursor",
+	limit: 1,
+	nextCursor: null,
+	hasNextPage: false,
+};
+
+// @ts-expect-error query.toListQuery must accept the output of query.schema.
+const mismatchedListContract = defineCrudResource({
+	...typedResource,
+	name: "mismatched-list-contract",
+	path: "mismatched-list-contract",
+	query: {
+		schema: ListTypedRecordsQuery,
+		toListQuery: (query: { readonly page: string }) => ({
+			mode: "offset",
+			page: Number(query.page),
+		}),
+	},
+});
+
+const unknownListField = defineCrudResource({
+	...typedResource,
+	name: "unknown-list-field",
+	path: "unknown-list-field",
+	query: {
+		schema: ListTypedRecordsQuery,
+		// @ts-expect-error list requests use the declared logical field vocabulary.
+		toListQuery: (query: z.output<typeof ListTypedRecordsQuery>) => ({
+			mode: "offset",
+			page: query.page,
+			order: [{ field: "missing", direction: "asc" }],
+		}),
+	},
+});
+
+void formattedListMeta;
+void canonicalListMeta;
+void mismatchedListContract;
+void unknownListField;
 
 // @ts-expect-error the ID contract must output a keyed parameter object.
 const scalarIdResource = defineCrudResource({

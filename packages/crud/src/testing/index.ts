@@ -4,4 +4,5 @@ export {
 	runCrudAdapterConformance,
 	type CrudAdapterConformanceCase,
 	type CrudAdapterConformanceFixture,
+	type CrudAdapterConformanceVersion,
 } from "./conformance.ts";

@@ -7,7 +7,14 @@ import type {
 	CrudProjection,
 	CrudScope,
 } from "../runtime/runtime.types.ts";
-import type { CrudQueryConfig } from "../query/query.types.ts";
+import type { CrudConcurrencyConfig } from "../runtime/concurrency.ts";
+import type {
+	CrudCursorMeta,
+	CrudOffsetMeta,
+	CrudPageMeta,
+	CrudPageMetaFormatters,
+	CrudQueryConfig,
+} from "../query/query.types.ts";
 import type { CrudRelationConfig } from "../relation/relation.types.ts";
 import type { CrudSchemaSource, SchemaInput, SchemaOutput } from "../schema/schema.types.ts";
 import type { CrudEnhancers, CrudOperations } from "./operations.ts";
@@ -86,6 +93,11 @@ export interface CrudResourceDefinition<
 	readonly operations: CrudOperations;
 	readonly query?: CrudQueryConfig<NoInfer<Fields[number]>>;
 	readonly softDelete?: CrudSoftDeleteConfig<NoInfer<Fields[number]>>;
+	/**
+	 * Optimistic concurrency on a row-version field: responses carry `ETag`, and PATCH, PUT,
+	 * and DELETE require `If-Match` (absent → 428, stale → 412).
+	 */
+	readonly concurrency?: CrudConcurrencyConfig<NoInfer<Fields[number]>>;
 	readonly relations?: Relations & CrudTypedRelations<Fields, Relations>;
 	readonly hooks?: readonly InjectionToken<CrudLifecycleHook>[];
 	/** Transaction-bound mutation validators, executed in declaration order after before hooks. */
@@ -478,6 +490,20 @@ type CrudSortSelectionConstraint<Definition extends CrudResourceDefinition> = De
 		: CrudResourceTypeError<"sort.default and sort.cursor must use fields enabled by sort.fields">
 	: unknown;
 
+type CrudQueryContractConstraint<Definition extends CrudResourceDefinition> = Definition extends {
+	readonly query: infer Query;
+}
+	? Query extends { readonly schema: infer Schema extends CrudSchemaSource }
+		? Query extends { readonly toListQuery: (parsed: infer Parsed) => unknown }
+			? [SchemaOutput<Schema>] extends [Parsed]
+				? unknown
+				: CrudResourceTypeError<"query.toListQuery must accept the output of query.schema (annotate its parameter)">
+			: CrudResourceTypeError<"query.schema requires query.toListQuery">
+		: Query extends { readonly toListQuery: unknown }
+			? CrudResourceTypeError<"query.toListQuery requires query.schema">
+			: unknown
+	: unknown;
+
 type CrudUpsertContractConstraint<Definition extends CrudResourceDefinition> =
 	Definition["operations"] extends { readonly upsert: unknown }
 		? Definition["contracts"] extends { readonly upsert: CrudSchemaSource }
@@ -495,6 +521,7 @@ export type CrudResourceDefinitionConstraint<Definition extends CrudResourceDefi
 		CrudRelationFieldConstraint<Definition> &
 		CrudRelationTupleConstraint<Definition> &
 		CrudSortSelectionConstraint<Definition> &
+		CrudQueryContractConstraint<Definition> &
 		CrudUpsertContractConstraint<Definition>;
 
 export type AnyCrudResource = CrudResource<
@@ -568,6 +595,26 @@ export type CrudValidatorType<Resource extends AnyCrudResource> = Type<
 	CrudMutationValidator<Resource>
 >;
 export type CrudScopeType<Resource extends AnyCrudResource> = Type<CrudScope<Resource>>;
+
+type CrudFormattedMeta<
+	Formatters,
+	Mode extends "offset" | "cursor",
+	Canonical,
+> = Formatters extends {
+	readonly [Key in Mode]: { readonly schema: infer Source extends CrudSchemaSource };
+}
+	? SchemaInput<Source>
+	: Canonical;
+
+/** Page `meta` returned by `CrudService.list()`/`listQuery()` for a concrete resource. */
+export type CrudListMeta<Resource extends AnyCrudResource> = Resource extends {
+	readonly query: {
+		readonly pagination: { readonly meta: infer Formatters extends CrudPageMetaFormatters };
+	};
+}
+	? | CrudFormattedMeta<Formatters, "offset", CrudOffsetMeta>
+		| CrudFormattedMeta<Formatters, "cursor", CrudCursorMeta>
+	: CrudPageMeta;
 
 /** Complete logical fields accepted by the core for this resource. */
 export type CrudRequiredField<Resource extends AnyCrudResource> = CrudField<Resource>;

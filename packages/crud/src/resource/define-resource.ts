@@ -1,6 +1,9 @@
 import { assertCrudFullTextSearchOptions } from "../query/full-text-search.ts";
 import { CRUD_FILTER_OPERATORS } from "../query/query.types.ts";
-import { resolveCrudPaginationModes } from "../query/pagination.ts";
+import {
+	resolveCrudPaginationModes,
+	resolveCrudPaginationParameterNames,
+} from "../query/pagination.ts";
 import { getCrudSchema, type CrudSchemaSource } from "../schema/schema.types.ts";
 import { CRUD_OPERATION_NAMES, type CrudEnhancers, type CrudOperations } from "./operations.ts";
 import {
@@ -151,6 +154,7 @@ function assertResourceDefinition(definition: CrudResourceDefinition): void {
 		assertDeclaredField(definition, "softDelete.field", definition.softDelete.field);
 	}
 	assertQueryConfiguration(definition);
+	assertConcurrencyConfiguration(definition);
 	assertRelationConfiguration(definition);
 	assertVersionConfiguration(definition);
 }
@@ -204,6 +208,9 @@ function snapshotResourceDefinition<Definition extends CrudResourceDefinition>(
 		operations,
 		...(query === undefined ? {} : { query }),
 		...(softDelete === undefined ? {} : { softDelete }),
+		...(definition.concurrency === undefined
+			? {}
+			: { concurrency: Object.freeze({ ...definition.concurrency }) }),
 		...(relations === undefined ? {} : { relations }),
 		...(definition.hooks === undefined ? {} : { hooks: Object.freeze([...definition.hooks]) }),
 		...(definition.validators === undefined
@@ -237,6 +244,8 @@ function snapshotEnhancers<Enhancers extends CrudEnhancers>(enhancers: Enhancers
 
 function snapshotQuery(query: CrudQueryConfig): CrudQueryConfig {
 	return Object.freeze({
+		...(query.schema === undefined ? {} : { schema: snapshotSchemaSource(query.schema) }),
+		...(query.toListQuery === undefined ? {} : { toListQuery: query.toListQuery }),
 		...(query.filters === undefined
 			? {}
 			: {
@@ -287,7 +296,35 @@ function snapshotQuery(query: CrudQueryConfig): CrudQueryConfig {
 				}),
 		...(query.pagination === undefined
 			? {}
-			: { pagination: Object.freeze({ ...query.pagination }) }),
+			: {
+					pagination: Object.freeze({
+						...query.pagination,
+						...(query.pagination.parameters === undefined
+							? {}
+							: { parameters: Object.freeze({ ...query.pagination.parameters }) }),
+						...(query.pagination.meta === undefined
+							? {}
+							: {
+									meta: Object.freeze(
+										Object.fromEntries(
+											Object.entries(query.pagination.meta).flatMap(([mode, formatter]) =>
+												formatter === undefined
+													? []
+													: [
+															[
+																mode,
+																Object.freeze({
+																	schema: snapshotSchemaSource(formatter.schema),
+																	format: formatter.format,
+																}),
+															],
+														],
+											),
+										),
+									),
+								}),
+					}),
+				}),
 	});
 }
 
@@ -385,6 +422,23 @@ function assertPathParamsConfiguration(
 
 function assertQueryConfiguration(definition: CrudResourceDefinition): void {
 	const name = definition.name;
+	const query = definition.query;
+	if (query?.schema !== undefined || query?.toListQuery !== undefined) {
+		assertSchemaSource(name, "query.schema", query.schema);
+		if (typeof query.toListQuery !== "function") {
+			throw new TypeError(`CRUD resource "${name}" query.schema requires query.toListQuery.`);
+		}
+		if (query.filters !== undefined) {
+			throw new TypeError(
+				`CRUD resource "${name}" query.filters belongs to the bracket grammar; express filters in query.schema and query.toListQuery.`,
+			);
+		}
+		if (query.pagination?.parameters !== undefined) {
+			throw new TypeError(
+				`CRUD resource "${name}" query.pagination.parameters belongs to the bracket grammar; name parameters in query.schema.`,
+			);
+		}
+	}
 	for (const [field, config] of Object.entries(definition.query?.filters ?? {})) {
 		assertNonEmptyString(name, `filter field`, field);
 		assertDeclaredField(definition, "query.filters", field);
@@ -425,6 +479,8 @@ function assertQueryConfiguration(definition: CrudResourceDefinition): void {
 	if (!modes.offset && !modes.cursor) {
 		throw new TypeError(`CRUD resource "${name}" must enable a pagination mode.`);
 	}
+	assertPaginationParameters(name, pagination);
+	assertPageMetaFormatters(name, pagination, modes);
 	assertOptionalPositiveInteger(name, "query.pagination.defaultLimit", pagination?.defaultLimit);
 	assertOptionalPositiveInteger(name, "query.pagination.maxLimit", pagination?.maxLimit);
 	if (
@@ -474,6 +530,89 @@ function assertQueryConfiguration(definition: CrudResourceDefinition): void {
 		if (maximum < minimum) {
 			throw new TypeError(`CRUD resource "${name}" search.maxLength must be >= minLength.`);
 		}
+	}
+}
+
+const BRACKET_ROOT_PARAMETERS = new Set(["sort", "search", "include", "deleted", "filter"]);
+
+function assertPaginationParameters(
+	name: string,
+	pagination: CrudQueryConfig["pagination"] | undefined,
+): void {
+	const parameters = pagination?.parameters;
+	if (parameters === undefined) return;
+	if (!isRecord(parameters)) {
+		throw new TypeError(`CRUD resource "${name}" query.pagination.parameters must be an object.`);
+	}
+	for (const [key, value] of Object.entries(parameters)) {
+		if (key !== "page" && key !== "limit" && key !== "after") {
+			throw new TypeError(
+				`CRUD resource "${name}" query.pagination.parameters has unknown key "${key}".`,
+			);
+		}
+		if (value === undefined) continue;
+		assertNonEmptyString(name, `query.pagination.parameters.${key}`, value);
+		if (BRACKET_ROOT_PARAMETERS.has(value) || /[[\]\s]/u.test(value)) {
+			throw new TypeError(
+				`CRUD resource "${name}" query.pagination.parameters.${key} cannot be "${value}".`,
+			);
+		}
+	}
+	const names = resolveCrudPaginationParameterNames(pagination);
+	assertUnique(name, "query.pagination.parameters", [names.page, names.limit, names.after]);
+}
+
+function assertPageMetaFormatters(
+	name: string,
+	pagination: CrudQueryConfig["pagination"] | undefined,
+	modes: { readonly offset: boolean; readonly cursor: boolean },
+): void {
+	const meta = pagination?.meta;
+	if (meta === undefined) return;
+	if (!isRecord(meta)) {
+		throw new TypeError(`CRUD resource "${name}" query.pagination.meta must be an object.`);
+	}
+	for (const [mode, formatter] of Object.entries(meta)) {
+		if (mode !== "offset" && mode !== "cursor") {
+			throw new TypeError(
+				`CRUD resource "${name}" query.pagination.meta has unknown mode "${mode}".`,
+			);
+		}
+		if (formatter === undefined) continue;
+		if (!modes[mode]) {
+			throw new TypeError(
+				`CRUD resource "${name}" query.pagination.meta.${mode} needs ${mode} pagination enabled.`,
+			);
+		}
+		if (!isRecord(formatter) || typeof formatter.format !== "function") {
+			throw new TypeError(
+				`CRUD resource "${name}" query.pagination.meta.${mode} needs a format function.`,
+			);
+		}
+		assertSchemaSource(name, `query.pagination.meta.${mode}.schema`, formatter.schema);
+	}
+}
+
+function assertConcurrencyConfiguration(definition: CrudResourceDefinition): void {
+	const concurrency = definition.concurrency;
+	if (concurrency === undefined) return;
+	if (!isRecord(concurrency)) {
+		throw new TypeError(`CRUD resource "${definition.name}" concurrency must be an object.`);
+	}
+	assertNonEmptyString(definition.name, "concurrency.field", concurrency.field);
+	assertDeclaredField(definition, "concurrency.field", concurrency.field);
+	if (concurrency.increment !== undefined && typeof concurrency.increment !== "boolean") {
+		throw new TypeError(
+			`CRUD resource "${definition.name}" concurrency.increment must be boolean.`,
+		);
+	}
+	if (
+		Object.values(definition.idFields).includes(concurrency.field) ||
+		definition.softDelete?.field === concurrency.field
+	) {
+		throw new TypeError(
+			`CRUD resource "${definition.name}" concurrency.field must be a dedicated version field.`,
+		);
 	}
 }
 

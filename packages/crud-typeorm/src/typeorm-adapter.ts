@@ -1026,11 +1026,14 @@ export class TypeOrmCrudAdapter<
 		input: CrudFindOneInput<LogicalField>,
 		context: CrudAdapterContext,
 	): Promise<RecordType | null> {
+		// A lock only means something inside the caller's own (read-write) transaction; a
+		// one-statement transaction opened here would release it immediately.
+		const lock = input.lock === true && context.session !== undefined;
 		try {
 			return await this.#withRepository(
 				context,
 				{
-					accessMode: "read only",
+					accessMode: lock ? "read write" : "read only",
 					isolationLevel: strongestIsolationLevel(
 						this.#operationIsolationLevel,
 						this.#rowPredicateIsolationLevel,
@@ -1038,7 +1041,8 @@ export class TypeOrmCrudAdapter<
 					mustOwnCommit: false,
 				},
 				this.#rowPredicate !== undefined,
-				async (repository, activeContext) => await this.#findOne(repository, input, activeContext),
+				async (repository, activeContext) =>
+					await this.#findOne(repository, input, activeContext, lock),
 			);
 		} catch (error) {
 			throw databaseError(error);

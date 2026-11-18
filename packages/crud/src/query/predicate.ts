@@ -1,7 +1,7 @@
 import type { CrudPredicate } from "./query.types.ts";
 
 /** Combines predicates without producing redundant one-element `and` nodes. */
-export function andCrudPredicates<Field extends string>(
+export function andCrudPredicates<const Field extends string>(
 	...predicates: readonly (CrudPredicate<Field> | undefined)[]
 ): CrudPredicate<Field> | undefined {
 	const defined = predicates.filter(
@@ -17,7 +17,7 @@ export function andCrudPredicates<Field extends string>(
 }
 
 /** Combines predicates without producing redundant one-element `or` nodes. */
-export function orCrudPredicates<Field extends string>(
+export function orCrudPredicates<const Field extends string>(
 	...predicates: readonly (CrudPredicate<Field> | undefined)[]
 ): CrudPredicate<Field> | undefined {
 	const defined = predicates.filter(

@@ -46,6 +46,13 @@ export interface CrudAdapterContext {
 export interface CrudFindOneInput<QueryField extends string = string> {
 	readonly predicate: CrudPredicate<QueryField>;
 	readonly order?: readonly CrudOrder<QueryField>[];
+	/**
+	 * Lock the matched row for writing (`SELECT … FOR UPDATE`) until the caller's transaction
+	 * ends. CRUD requests it inside a mutation transaction before comparing `If-Match` with the
+	 * stored version. It is advisory: an adapter that cannot lock may ignore it, because CRUD
+	 * also pins the subsequent UPDATE/DELETE to that version with a predicate.
+	 */
+	readonly lock?: boolean;
 }
 
 export interface CrudFindManyInput<QueryField extends string = string> {

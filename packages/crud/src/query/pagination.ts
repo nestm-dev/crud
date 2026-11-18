@@ -1,4 +1,4 @@
-import type { CrudPaginationConfig } from "./query.types.ts";
+import type { CrudPaginationConfig, CrudPaginationParameterNames } from "./query.types.ts";
 
 export interface CrudPaginationModes {
 	readonly offset: boolean;
@@ -13,5 +13,16 @@ export function resolveCrudPaginationModes(
 	return {
 		offset: config?.offset ?? !cursor,
 		cursor,
+	};
+}
+
+/** Resolves the public names of the bracket grammar's pagination parameters. */
+export function resolveCrudPaginationParameterNames(
+	config: CrudPaginationConfig | undefined,
+): Required<CrudPaginationParameterNames> {
+	return {
+		page: config?.parameters?.page ?? "page",
+		limit: config?.parameters?.limit ?? "limit",
+		after: config?.parameters?.after ?? "after",
 	};
 }

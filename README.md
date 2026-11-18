@@ -28,12 +28,14 @@ interceptors, or filters globally.
 
 ```sh
 pnpm add @nestm/crud@alpha @nestm/crud-memory@alpha
-pnpm add @nestm/standard-schema@alpha @standard-schema/spec @nestjs/swagger
+pnpm add @standard-schema/spec @nestjs/swagger
 ```
 
 Install and pin the stable NestJS 12 packages tested by your application. This
-workspace currently tests `12.0.1`. `@nestm/standard-schema` and `@nestjs/swagger`
-are required peers, not optional integrations.
+workspace currently tests NestJS `12.5.1`, `@nestjs/swagger` `12.1.2`, TypeORM
+`1.1.3`, and PostgreSQL 18. `@nestjs/swagger` is a required peer.
+`@nestm/standard-schema` is optional: its `StandardSchemaModule.forRoot()` is one
+way to register the Nest-native validation pipe and serializer that CRUD needs.
 
 ## Quick start
 
@@ -108,11 +110,27 @@ const usersBinding = bindMemoryCrud({
 export class AppModule {}
 ```
 
-Applications must import `StandardSchemaModule.forRoot()` once. It installs the
-Nest-native Standard Schema request validation and response serialization used
-by generated controllers; bootstrap fails when CRUD resources are registered
-without both integrations enabled. Do not register a second copy of Nest's
-global Standard Schema pipe or serializer.
+Applications must register Nest's global `StandardSchemaValidationPipe` and
+`StandardSchemaSerializerInterceptor` exactly once. `StandardSchemaModule.forRoot()`
+from `@nestm/standard-schema` does both; without that package, register them
+directly:
+
+```ts
+import { StandardSchemaSerializerInterceptor, StandardSchemaValidationPipe } from "@nestjs/common";
+import { APP_INTERCEPTOR, APP_PIPE, Reflector } from "@nestjs/core";
+
+providers: [
+	{ provide: APP_PIPE, useValue: new StandardSchemaValidationPipe() },
+	{
+		provide: APP_INTERCEPTOR,
+		inject: [Reflector],
+		useFactory: (reflector: Reflector) => new StandardSchemaSerializerInterceptor(reflector),
+	},
+],
+```
+
+Bootstrap fails when CRUD resources are registered without both. Do not
+register a second copy of either.
 
 Set up `SwaggerModule` normally. Generated handlers carry tags, operation IDs,
 response statuses, request/response schemas, path parameters, query parameters,
@@ -201,6 +219,162 @@ Pagination mode defaults are deliberate:
 
 Offset responses include total counts and page metadata. Cursor responses use
 keyset pagination and contain only `limit`, `nextCursor`, and `hasNextPage`.
+
+### Explicit list contracts
+
+The bracket grammar above is the default whenever a resource has no
+`query.schema`. A resource that declares `query.schema` replaces it entirely
+with its own explicit contract: one strict Standard Schema for the whole query
+object plus `query.toListQuery`, which maps the parsed value to a
+parser-independent `CrudListRequest` (filter predicate AST, order, and either an
+offset page or a keyset cursor). Generated controllers bind the schema with
+Nest's native `@Query({ schema })`, so Nest validates it and Swagger documents
+each property as its own query parameter; `filter[...]` keys are simply unknown
+properties of a strict schema.
+
+```ts
+import { andCrudPredicates } from "@nestm/crud";
+
+const Status = z.enum(["active", "inactive"]);
+const ListBuildersQuery = z.strictObject({
+	page: z.coerce.number().int().min(1).default(1),
+	pageSize: z.coerce.number().int().min(1).max(100).default(20),
+	sort: z.enum(["name", "-name", "createdAt", "-createdAt"]).optional(),
+	// Repeated keys (?status=a&status=b) arrive as an array and mean IN.
+	status: z
+		.union([Status, z.array(Status)])
+		.optional()
+		.transform((value) => (value === undefined || Array.isArray(value) ? value : [value])),
+	// Ranges are <field>From / <field>To.
+	createdFrom: z.iso.datetime().optional(),
+	createdTo: z.iso.datetime().optional(),
+});
+
+export const builders = defineCrudResource({
+	fields: ["id", "name", "status", "createdAt", "version"],
+	// name, path, itemPath, idFields, contracts, operations …
+	query: {
+		schema: ListBuildersQuery,
+		// Annotate the parameter with the schema output; defineCrudResource checks it.
+		toListQuery: (query: z.output<typeof ListBuildersQuery>) => {
+			const predicate = andCrudPredicates(
+				query.status === undefined
+					? undefined
+					: { kind: "comparison", field: "status", operator: "in", value: query.status },
+				query.createdFrom === undefined
+					? undefined
+					: { kind: "comparison", field: "createdAt", operator: "gte", value: query.createdFrom },
+				query.createdTo === undefined
+					? undefined
+					: { kind: "comparison", field: "createdAt", operator: "lte", value: query.createdTo },
+			);
+			return {
+				mode: "offset",
+				page: query.page,
+				limit: query.pageSize,
+				...(predicate === undefined ? {} : { predicate }),
+				...(query.sort === undefined
+					? {}
+					: {
+							order: [
+								{
+									field: query.sort.replace("-", "") as "name" | "createdAt",
+									direction: query.sort.startsWith("-") ? "desc" : "asc",
+								},
+							],
+						}),
+			};
+		},
+		sort: { fields: ["name", "createdAt"] }, // optional server-side whitelist
+		pagination: { offset: true, maxLimit: 100, meta: { offset: pageMeta } },
+	},
+});
+```
+
+CRUD validates every request against the resource policy before it runs:
+predicate and order fields must be declared (and listed in `query.sort.fields`
+when configured), the page size must stay within `maxLimit`, cursor ordering
+must use `query.sort.cursor` fields, and includes and deleted-row visibility stay
+allowlisted. All ID fields are still appended as tie-breakers. Return
+`{ mode: "cursor", after, limit }` for keyset pages; `after` is the previous
+page's `nextCursor`.
+
+Custom controllers can skip every grammar with `CrudService.listQuery(request)`.
+`CrudService.list(rawQuery)` validates a raw query with `query.schema` itself;
+when a controller already bound `@Query({ schema })`, call
+`listQuery(toCrudListRequest(resource, parsed))` instead, because a transformed
+value cannot generally be validated twice.
+
+### Pagination names and page metadata
+
+Bracket-grammar resources can rename their pagination parameters, and any
+resource can replace the canonical `meta` object per mode. The formatter's
+schema drives response validation and the OpenAPI document, so they always
+match what `format` returns:
+
+```ts
+const pageMeta = {
+	schema: z.strictObject({
+		page: z.number().int(),
+		pageSize: z.number().int(),
+		totalItems: z.number().int(),
+		totalPages: z.number().int(),
+	}),
+	format: (meta: CrudOffsetMeta) => ({
+		page: meta.page,
+		pageSize: meta.limit,
+		totalItems: meta.total,
+		totalPages: meta.totalPages,
+	}),
+};
+
+pagination: {
+	offset: true,
+	cursor: true,
+	parameters: { limit: "pageSize", after: "cursor" }, // bracket grammar only
+	meta: {
+		offset: pageMeta, // { data, meta: { page, pageSize, totalItems, totalPages } }
+		cursor: {
+			schema: z.strictObject({ limit: z.number().int(), nextCursor: z.string().nullable() }),
+			format: (meta) => ({ limit: meta.limit, nextCursor: meta.nextCursor }),
+		},
+	},
+}
+```
+
+The renamed names replace the defaults everywhere: parsing, error parameters,
+and Swagger. `createCrudPageSchema(response, modes, { meta })` builds the same
+page schema for custom controllers.
+
+## Optimistic concurrency
+
+```ts
+concurrency: {
+	field: "version";
+}
+```
+
+declares a row-version field (a TypeORM `@VersionColumn`, a trigger-maintained
+column, …) as the resource's entity tag:
+
+- read, create, update, upsert, and restore responses carry `ETag: "<version>"`;
+- `PATCH` and `DELETE` require `If-Match`: absent (or `*`) → `428`, a tag that
+  does not match the row → `412`;
+- the stored row is read with a write lock (`SELECT … FOR UPDATE` in the TypeORM
+  adapter) before the comparison, and the UPDATE/DELETE is pinned to that
+  version with `WHERE version = :v`, so a writer that loses a race also gets
+  `412` instead of overwriting;
+- `PUT` (upsert) is conditional too: `If-Match` replaces the binding's
+  `upsert.overwriteFields` of the current version, `If-None-Match: *` only
+  creates (`412` if the row exists), and neither header is `428`.
+
+Strong and weak forms of a tag compare equal (`"3"` and `W/"3"`), and a bare `3`
+is accepted. Set `increment: true` when the persistence layer does not bump the
+version itself; CRUD then writes `version + 1` through `mappings.persistence`.
+Direct service calls read the headers from the execution context or accept
+them explicitly: `service.update(id, input, context, { ifMatch: '"3"' })`.
+Swagger documents the `If-Match`/`If-None-Match` headers, the `ETag` response
+header, and the `412`/`428` responses.
 
 ## Composite IDs
 
@@ -516,8 +690,9 @@ silently truncated. Nested relation traversal is deferred.
 
 Generated routes preserve Nest's normal exception body shape. Invalid request,
 query, cursor, or database-constraint input returns `400`; missing and
-scope-hidden records return `404`; unique conflicts return `409`; over-bound
-relations return `422`. Unexpected adapter and transactional-hook failures
+scope-hidden records return `404`; unique conflicts return `409`; a stale
+`If-Match` returns `412`; a missing `If-Match` on a concurrency-enabled resource
+returns `428`; over-bound relations return `422`. Unexpected adapter and transactional-hook failures
 return a sanitized `500`; raw ORM errors are never sent to the client.
 Mapped conflict and constraint exceptions retain the originating
 `CrudAdapterError` as their internal `cause`, allowing custom facades and logs
@@ -589,7 +764,7 @@ Swagger metadata, and four adapters. The broader
 [hono-crud feature surface](https://github.com/kshdotdev/hono-crud/blob/80de807d7c18691b7ddedf6ccca6db47b5cb1b57/README.md#features)
 is a staged roadmap, not an alpha release gate.
 
-Batch operations, bulk patch, optimistic concurrency,
+Batch operations, bulk patch,
 aggregates, sparse fieldsets, import/export, computed fields,
 audit history, record versioning, GraphQL, microservices, and schematics are
 deferred. Cache, rate limiting, idempotency, logging/events/webhooks,

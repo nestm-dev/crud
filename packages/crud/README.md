@@ -14,11 +14,11 @@ injection, and adapter guidance.
 
 ## Required application wiring
 
-Import `StandardSchemaModule.forRoot()` exactly once at the application root.
-CRUD bootstrap fails if its global request validator or response serializer is
-disabled or absent. `@nestm/standard-schema` and `@nestjs/swagger` are required
-peers; CRUD itself never installs application guards, filters, or other global
-policy.
+Register Nest's global `StandardSchemaValidationPipe` and
+`StandardSchemaSerializerInterceptor` exactly once (for example through
+`StandardSchemaModule.forRoot()` from the optional `@nestm/standard-schema`).
+CRUD bootstrap fails if either is absent. `@nestjs/swagger` is a required peer;
+CRUD itself never installs application guards, filters, or other global policy.
 
 Generated controllers include Swagger request, response, status, tag,
 operation-ID, parameter, query, and Nest error metadata. If a schema vendor
@@ -33,6 +33,15 @@ bootstrap; adapter factories may still resolve asynchronously. Pass
 service providers, imports, and service exports while generating no controllers.
 
 ## Contract notes
+
+- `query.schema` + `query.toListQuery` replace the bracket list grammar with an
+  explicit per-endpoint contract bound through `@Query({ schema })`;
+  `CrudService.listQuery()` runs a `CrudListRequest` with no grammar at all.
+  Without `query.schema` the bracket grammar is the default.
+- `query.pagination.parameters` renames the bracket grammar's `page`, `limit`,
+  and `after`; `query.pagination.meta` replaces the page `meta` per mode.
+- `concurrency: { field }` adds `ETag` responses and makes PATCH, PUT, and
+  DELETE require `If-Match` (absent → 428, stale → 412).
 
 - `operations` is mandatory. Use `crudOperations.all()`, `readOnly()`, or
   `only(...)`; explicitly add `restore` when soft deletion is configured.
