@@ -24,7 +24,10 @@ let succeeded = false;
 
 try {
 	await mkdir(packsDirectory);
-	const rootManifest = await readJson(join(workspaceRoot, "package.json"));
+	const rootManifest = resolveCatalogVersions(
+		await readJson(join(workspaceRoot, "package.json")),
+		await readFile(join(workspaceRoot, "pnpm-workspace.yaml"), "utf8"),
+	);
 	const manifests = new Map();
 	const tarballs = new Map();
 
@@ -168,6 +171,32 @@ function assertPackageIdentity(definition, manifest) {
 
 function packedFilename(name, version) {
 	return `${name.replace(/^@/, "").replaceAll("/", "-")}-${version}.tgz`;
+}
+
+/**
+ * Replaces `catalog:` root devDependency specifiers with the exact versions pinned in the
+ * workspace's default catalog, so isolated consumers install the same framework versions.
+ */
+function resolveCatalogVersions(rootManifest, workspaceYaml) {
+	const catalog = new Map();
+	let inCatalog = false;
+	for (const line of workspaceYaml.split(/\r?\n/u)) {
+		if (/^\S/u.test(line)) {
+			inCatalog = line.trim() === "catalog:";
+			continue;
+		}
+		const entry = inCatalog ? /^\s+"?([^":\s]+)"?:\s*"?([^"\s#]+)"?/u.exec(line) : null;
+		if (entry !== null) catalog.set(entry[1], entry[2]);
+	}
+	const development = requireObject(rootManifest.devDependencies, "root devDependencies");
+	return {
+		...rootManifest,
+		devDependencies: Object.fromEntries(
+			Object.entries(development).map(([name, version]) =>
+				version === "catalog:" ? [name, requiredMapValue(catalog, name)] : [name, version],
+			),
+		),
+	};
 }
 
 async function readJson(path) {

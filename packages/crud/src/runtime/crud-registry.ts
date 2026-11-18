@@ -173,7 +173,7 @@ export class CrudRegistry implements OnApplicationBootstrap {
 			.some((interceptor) => interceptor instanceof StandardSchemaSerializerInterceptor);
 		if (!hasValidation || !hasSerialization) {
 			throw new TypeError(
-				"CRUD resources require StandardSchemaModule.forRoot() with validation and serialization enabled.",
+				"CRUD resources require Nest's global StandardSchemaValidationPipe and StandardSchemaSerializerInterceptor (StandardSchemaModule.forRoot() from @nestm/standard-schema registers both).",
 			);
 		}
 	}

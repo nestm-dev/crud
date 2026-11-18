@@ -235,7 +235,7 @@ describe("CrudModule", () => {
 		}).compile();
 
 		await expect(Promise.resolve().then(() => moduleRef.init())).rejects.toThrowError(
-			"CRUD resources require StandardSchemaModule.forRoot()",
+			"CRUD resources require Nest's global StandardSchemaValidationPipe",
 		);
 		try {
 			await moduleRef.close();
