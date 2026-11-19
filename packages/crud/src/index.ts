@@ -37,6 +37,7 @@ export type {
 	DefinedCrudResource,
 	CrudHookType,
 	CrudId,
+	CrudListMeta,
 	CrudPathParams,
 	CrudPathParamsConfig,
 	CrudResource,
@@ -70,6 +71,8 @@ export type {
 	CrudValidationContext,
 } from "./runtime/runtime.types.ts";
 export { defineCrudFact, provideCrudFact } from "./runtime/crud-facts.ts";
+export { CrudPreconditionRequiredException, parseCrudEntityTags } from "./runtime/concurrency.ts";
+export type { CrudConcurrencyConfig, CrudWritePreconditions } from "./runtime/concurrency.ts";
 export type { CrudFact, CrudFactEntry, CrudFacts } from "./runtime/crud-facts.ts";
 export { CrudContext } from "./controller/crud-context.decorator.ts";
 export { InjectCrud } from "./controller/inject-crud.decorator.ts";
@@ -79,12 +82,18 @@ export {
 	CrudQueryValidationError,
 	andCrudPredicates,
 	buildCrudOrder,
+	normalizeCrudOrder,
 	orCrudPredicates,
 	parseCrudListQuery,
+	parseCrudListSchema,
+	resolveCrudListRequest,
 	resolveCrudPaginationModes,
+	resolveCrudPaginationParameterNames,
+	toCrudListRequest,
 } from "./query/index.ts";
 export type { CrudPaginationModes } from "./query/pagination.ts";
 export type {
+	CrudCursorListRequest,
 	CrudCursorMeta,
 	CrudCursorQuery,
 	CrudFilterFieldConfig,
@@ -93,12 +102,17 @@ export type {
 	CrudFullTextWeight,
 	CrudFilterOperator,
 	CrudListQuery,
+	CrudListRequest,
+	CrudOffsetListRequest,
 	CrudOffsetMeta,
 	CrudOffsetQuery,
 	CrudOrder,
 	CrudPage,
 	CrudPageMeta,
+	CrudPageMetaFormatter,
+	CrudPageMetaFormatters,
 	CrudPaginationConfig,
+	CrudPaginationParameterNames,
 	CrudPredicate,
 	CrudQueryConfig,
 	CrudQueryParserOptions,
@@ -129,6 +143,7 @@ export {
 	createCrudPageSchema,
 	withCrudStandardSchemaConverter,
 	type CrudPageSchema,
+	type CrudPageSchemaOptions,
 } from "./schema/page-schema.ts";
 export {
 	CrudSchemaValidationError,

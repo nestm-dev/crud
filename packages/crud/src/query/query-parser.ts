@@ -9,7 +9,7 @@ import type {
 } from "../resource/resource.types.ts";
 import { parseCrudSchema, type CrudSchemaSource } from "../schema/schema.types.ts";
 import { andCrudPredicates } from "./predicate.ts";
-import { resolveCrudPaginationModes } from "./pagination.ts";
+import { resolveCrudPaginationModes, resolveCrudPaginationParameterNames } from "./pagination.ts";
 import { CrudQueryValidationError } from "./query.error.ts";
 import {
 	CRUD_FILTER_OPERATORS,
@@ -18,13 +18,14 @@ import {
 	type CrudListQuery,
 	type CrudOffsetQuery,
 	type CrudOrder,
+	type CrudPaginationParameterNames,
 	type CrudPredicate,
 	type CrudQueryParserOptions,
 	type CrudRawQuery,
 } from "./query.types.ts";
 
 const FILTER_PARAMETER_PATTERN = /^filter\[([^\u005B\u005D]+)\]\[([^\u005B\u005D]+)\]$/u;
-const ROOT_PARAMETERS = new Set(["sort", "search", "include", "deleted", "page", "limit", "after"]);
+const FIXED_ROOT_PARAMETERS = ["sort", "search", "include", "deleted"] as const;
 const DEFAULT_LIMIT = 20;
 const DEFAULT_MAX_LIMIT = 100;
 
@@ -45,8 +46,12 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 	rawQuery: CrudRawQuery,
 	options: CrudQueryParserOptions<CrudField<Resource>> = {},
 ): Promise<CrudListQuery<CrudRequiredField<Resource>, CrudRelationName<Resource>>> {
-	const normalized = normalizeQuery(rawQuery);
-	const pagination = resolvePagination(resource, normalized, options);
+	const names = resolveCrudPaginationParameterNames(resource.query?.pagination);
+	const normalized = normalizeQuery(
+		rawQuery,
+		new Set([...FIXED_ROOT_PARAMETERS, names.page, names.limit, names.after]),
+	);
+	const pagination = resolvePagination(resource, normalized, options, names);
 	const order = buildCrudOrder(resource, readOptionalString(normalized, "sort"), pagination.mode);
 	const filters = await parseFilters(resource, normalized.filters);
 	const search = parseSearch(resource, normalized);
@@ -58,7 +63,7 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 		throw queryError(
 			"invalid_pagination",
 			"Full-text relevance search requires offset pagination.",
-			"after",
+			names.after,
 		);
 	}
 	const includes = parseIncludes(resource, normalized);
@@ -87,7 +92,7 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 			throw queryError(
 				"cursor_codec_required",
 				"Cursor pagination requires a configured cursor codec.",
-				"after",
+				names.after,
 			);
 		}
 		try {
@@ -100,7 +105,7 @@ export async function parseCrudListQuery<Resource extends AnyCrudResource>(
 		} catch (cause) {
 			if (cause instanceof CrudCursorError) {
 				throw new CrudQueryValidationError("invalid_cursor", "Invalid pagination cursor.", {
-					parameter: "after",
+					parameter: names.after,
 					cause,
 				});
 			}
@@ -326,18 +331,19 @@ function resolvePagination(
 	resource: AnyCrudResource,
 	query: NormalizedQuery,
 	options: CrudQueryParserOptions,
+	names: Required<CrudPaginationParameterNames>,
 ):
 	| { readonly mode: "offset"; readonly page: number; readonly limit: number }
 	| { readonly mode: "cursor"; readonly after?: string; readonly limit: number } {
 	const config = resource.query?.pagination;
 	const { offset: offsetEnabled, cursor: cursorEnabled } = resolveCrudPaginationModes(config);
-	const hasPage = query.parameters.has("page");
-	const hasAfter = query.parameters.has("after");
+	const hasPage = query.parameters.has(names.page);
+	const hasAfter = query.parameters.has(names.after);
 	if (hasPage && hasAfter) {
 		throw queryError(
 			"invalid_pagination",
-			'Query parameters "page" and "after" cannot be combined.',
-			"page",
+			`Query parameters "${names.page}" and "${names.after}" cannot be combined.`,
+			names.page,
 		);
 	}
 
@@ -351,20 +357,20 @@ function resolvePagination(
 	) {
 		throw new TypeError("CRUD pagination limits must be positive safe integers within range.");
 	}
-	const rawLimit = readOptionalScalar(query, "limit");
+	const rawLimit = readOptionalScalar(query, names.limit);
 	const limit =
 		rawLimit === undefined
 			? configuredDefault
-			: parsePositiveInteger(rawLimit, "limit", configuredMaximum);
+			: parsePositiveInteger(rawLimit, names.limit, configuredMaximum);
 
 	const mode = hasAfter || (!hasPage && cursorEnabled) ? "cursor" : "offset";
 	if (mode === "cursor") {
 		if (!cursorEnabled) {
-			throw queryError("invalid_pagination", "Cursor pagination is not enabled.", "after");
+			throw queryError("invalid_pagination", "Cursor pagination is not enabled.", names.after);
 		}
-		const after = readOptionalString(query, "after");
+		const after = readOptionalString(query, names.after);
 		if (after !== undefined && after.length === 0) {
-			throw queryError("invalid_cursor", "Invalid pagination cursor.", "after");
+			throw queryError("invalid_cursor", "Invalid pagination cursor.", names.after);
 		}
 		if (limit === Number.MAX_SAFE_INTEGER) {
 			throw new TypeError("CRUD cursor pagination limits must leave room for overflow detection.");
@@ -372,21 +378,24 @@ function resolvePagination(
 		return { mode, ...(after === undefined ? {} : { after }), limit };
 	}
 	if (!offsetEnabled) {
-		throw queryError("invalid_pagination", "Offset pagination is not enabled.", "page");
+		throw queryError("invalid_pagination", "Offset pagination is not enabled.", names.page);
 	}
-	const rawPage = readOptionalScalar(query, "page");
-	const page = rawPage === undefined ? 1 : parsePositiveInteger(rawPage, "page");
+	const rawPage = readOptionalScalar(query, names.page);
+	const page = rawPage === undefined ? 1 : parsePositiveInteger(rawPage, names.page);
 	if (!Number.isSafeInteger((page - 1) * limit)) {
 		throw queryError(
 			"invalid_pagination",
-			'Query parameters "page" and "limit" produce an unsafe offset.',
-			"page",
+			`Query parameters "${names.page}" and "${names.limit}" produce an unsafe offset.`,
+			names.page,
 		);
 	}
 	return { mode, page, limit };
 }
 
-function normalizeQuery(rawQuery: CrudRawQuery): NormalizedQuery {
+function normalizeQuery(
+	rawQuery: CrudRawQuery,
+	rootParameters: ReadonlySet<string>,
+): NormalizedQuery {
 	const parameters = new Map<string, unknown[]>();
 	const filterValues = new Map<string, { field: string; operator: string; values: unknown[] }>();
 	const entries: readonly (readonly [string, unknown])[] =
@@ -402,7 +411,7 @@ function normalizeQuery(rawQuery: CrudRawQuery): NormalizedQuery {
 			addNestedFilters(filterValues, value);
 			continue;
 		}
-		if (!ROOT_PARAMETERS.has(key)) {
+		if (!rootParameters.has(key)) {
 			throw queryError("unknown_parameter", `Unknown query parameter "${key}".`, key);
 		}
 		addParameter(parameters, key, value);

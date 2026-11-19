@@ -4,7 +4,9 @@ const NEST_ERROR_NAMES = {
 	400: "Bad Request",
 	404: "Not Found",
 	409: "Conflict",
+	412: "Precondition Failed",
 	422: "Unprocessable Entity",
+	428: "Precondition Required",
 	500: "Internal Server Error",
 } as const;
 

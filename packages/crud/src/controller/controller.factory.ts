@@ -22,10 +22,21 @@ import {
 	type Type,
 } from "@nestjs/common";
 import { PARAMTYPES_METADATA } from "@nestjs/common/constants";
-import { ApiExtension, ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
+import {
+	ApiExtension,
+	ApiHeader,
+	ApiOperation,
+	ApiQuery,
+	ApiResponse,
+	ApiTags,
+} from "@nestjs/swagger";
 
 import { getCrudServiceToken } from "../module/crud.tokens.ts";
-import { resolveCrudPaginationModes } from "../query/pagination.ts";
+import { toCrudListRequest } from "../query/list-request.ts";
+import {
+	resolveCrudPaginationModes,
+	resolveCrudPaginationParameterNames,
+} from "../query/pagination.ts";
 import type { CrudRawQuery } from "../query/query.types.ts";
 import type {
 	AnyCrudResource,
@@ -90,10 +101,11 @@ export function createCrudController<Resource extends AnyCrudResource>(
 			pathParamsOrContext: CrudPathParams<Resource> | ExecutionContext,
 			context?: ExecutionContext,
 		) {
-			return this.service.list(
-				query,
-				...collectionArguments(resource, pathParamsOrContext, context),
-			);
+			const args = collectionArguments(resource, pathParamsOrContext, context);
+			// With `query.schema`, Nest has already validated `query` through `@Query({ schema })`.
+			return resource.query?.schema === undefined
+				? this.service.list(query, ...args)
+				: this.service.listQuery(toCrudListRequest(resource, query), ...args);
 		}
 
 		read(id: CrudId<Resource>, query: CrudRawQuery, context: ExecutionContext) {
@@ -234,7 +246,12 @@ function decorateParameters(
 		return;
 	}
 	if (operation === "list") {
-		Query()(prototype, operation, 0);
+		const querySchema = resource.query?.schema;
+		(querySchema === undefined ? Query() : Query({ schema: getCrudSchema(querySchema) }))(
+			prototype,
+			operation,
+			0,
+		);
 		if (resource.pathParams === undefined) {
 			CrudContext()(prototype, operation, 1);
 		} else {
@@ -271,8 +288,10 @@ function decorateResponse(
 			? createCrudPageSchema(
 					resource.contracts.response,
 					resolveCrudPaginationModes(resource.query?.pagination),
+					{ meta: resource.query?.pagination?.meta },
 				)
 			: getCrudSchema(resource.contracts.response);
+	const concurrency = resource.concurrency !== undefined;
 	if (operation !== "delete") {
 		applyMethod(SerializeOptions({ schema: responseSchema }), controller, operation, descriptor);
 		applyMethod(
@@ -280,6 +299,16 @@ function decorateResponse(
 				status: OPERATION_STATUS[operation],
 				description: "Successful response.",
 				standardSchema: responseSchema,
+				...(concurrency && operation !== "list"
+					? {
+							headers: {
+								ETag: {
+									description: "Entity tag of the returned version; send it back in If-Match.",
+									schema: { type: "string" },
+								},
+							},
+						}
+					: {}),
 			}),
 			controller,
 			operation,
@@ -293,10 +322,12 @@ function decorateResponse(
 			descriptor,
 		);
 	}
+	if (concurrency) decorateConcurrencyHeaders(controller, operation, descriptor);
 	for (const [status, description] of errorResponses(
 		operation,
 		Object.keys(resource.relations ?? {}).length > 0,
 		operation === "delete" && "missing" in options && options.missing === "ignore",
+		concurrency,
 	)) {
 		applyMethod(
 			ApiResponse({ status, description, schema: createNestErrorResponseSchema(status) }),
@@ -321,7 +352,8 @@ function decorateSwaggerQueries(
 			descriptor,
 		);
 	}
-	if (operation !== "list") return;
+	// A schema contract is documented by Swagger from `@Query({ schema })` itself.
+	if (operation !== "list" || resource.query?.schema !== undefined) return;
 	const extension = createCrudQueryOpenApiExtension(resource);
 	if (extension !== undefined) {
 		applyMethod(
@@ -339,7 +371,8 @@ function decorateSwaggerQueries(
 	if ((resource.query?.search?.fields.length ?? 0) > 0) stringNames.push("search");
 	if (Object.keys(resource.relations ?? {}).length > 0) stringNames.push("include");
 	const modes = resolveCrudPaginationModes(resource.query?.pagination);
-	if (modes.cursor) stringNames.push("after");
+	const names = resolveCrudPaginationParameterNames(resource.query?.pagination);
+	if (modes.cursor) stringNames.push(names.after);
 	for (const name of stringNames) {
 		applyMethod(
 			ApiQuery({ name, required: false, type: String }),
@@ -363,7 +396,7 @@ function decorateSwaggerQueries(
 	const maximum = resource.query?.pagination?.maxLimit;
 	if (modes.offset) {
 		applyMethod(
-			ApiQuery({ name: "page", required: false, schema: { type: "integer", minimum: 1 } }),
+			ApiQuery({ name: names.page, required: false, schema: { type: "integer", minimum: 1 } }),
 			controller,
 			operation,
 			descriptor,
@@ -372,13 +405,54 @@ function decorateSwaggerQueries(
 	if (modes.offset || modes.cursor) {
 		applyMethod(
 			ApiQuery({
-				name: "limit",
+				name: names.limit,
 				required: false,
 				schema: {
 					type: "integer",
 					minimum: 1,
 					...(maximum === undefined ? {} : { maximum }),
 				},
+			}),
+			controller,
+			operation,
+			descriptor,
+		);
+	}
+}
+
+const CONDITIONAL_OPERATIONS: ReadonlySet<CrudOperationName> = new Set([
+	"update",
+	"upsert",
+	"delete",
+]);
+
+function decorateConcurrencyHeaders(
+	controller: CrudController,
+	operation: CrudOperationName,
+	descriptor: PropertyDescriptor,
+): void {
+	if (!CONDITIONAL_OPERATIONS.has(operation)) return;
+	applyMethod(
+		ApiHeader({
+			name: "If-Match",
+			required: operation !== "upsert",
+			description:
+				operation === "upsert"
+					? 'ETag of the version being replaced. Send If-None-Match: "*" instead to create.'
+					: "ETag of the version being changed. Missing → 428; stale → 412.",
+			schema: { type: "string" },
+		}),
+		controller,
+		operation,
+		descriptor,
+	);
+	if (operation === "upsert") {
+		applyMethod(
+			ApiHeader({
+				name: "If-None-Match",
+				required: false,
+				description: '"*" creates the record and fails with 412 when it already exists.',
+				schema: { type: "string", enum: ["*"] },
 			}),
 			controller,
 			operation,
@@ -443,6 +517,7 @@ function errorResponses(
 	operation: CrudOperationName,
 	hasRelations: boolean,
 	ignoresMissingDelete: boolean,
+	concurrency: boolean,
 ): readonly (readonly [CrudSwaggerErrorStatus, string])[] {
 	const responses: [CrudSwaggerErrorStatus, string][] = [
 		[HttpStatus.BAD_REQUEST, "Invalid request."],
@@ -452,6 +527,10 @@ function errorResponses(
 	}
 	if (["create", "update", "delete", "restore", "upsert"].includes(operation)) {
 		responses.push([HttpStatus.CONFLICT, "Resource conflict."]);
+	}
+	if (concurrency && CONDITIONAL_OPERATIONS.has(operation)) {
+		responses.push([HttpStatus.PRECONDITION_FAILED, "The resource version does not match."]);
+		responses.push([HttpStatus.PRECONDITION_REQUIRED, "The request must be conditional."]);
 	}
 	if (hasRelations && (operation === "list" || operation === "read")) {
 		responses.push([HttpStatus.UNPROCESSABLE_ENTITY, "Included relation exceeds its bound."]);

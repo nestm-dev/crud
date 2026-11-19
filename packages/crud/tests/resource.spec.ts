@@ -537,6 +537,87 @@ describe("defineCrudResource", () => {
 				}),
 			"unique route versions",
 		],
+		[
+			"a query schema without toListQuery",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					query: { schema: z.object({}) },
+				} as CrudResourceDefinition),
+			"query.schema requires query.toListQuery",
+		],
+		[
+			"bracket filters next to a query schema",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					query: {
+						schema: z.object({}),
+						toListQuery: () => ({ mode: "offset", page: 1 }),
+						filters: { name: { schema: z.string(), operators: ["eq"] } },
+					},
+				} as CrudResourceDefinition),
+			"query.filters belongs to the bracket grammar",
+		],
+		[
+			"renamed pagination parameters next to a query schema",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					query: {
+						schema: z.object({}),
+						toListQuery: () => ({ mode: "offset", page: 1 }),
+						pagination: { parameters: { limit: "pageSize" } },
+					},
+				} as CrudResourceDefinition),
+			"query.pagination.parameters belongs to the bracket grammar",
+		],
+		[
+			"a pagination parameter that collides with the grammar",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					query: { pagination: { parameters: { page: "sort" } } },
+				}),
+			'query.pagination.parameters.page cannot be "sort"',
+		],
+		[
+			"two pagination parameters with one name",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					query: { pagination: { parameters: { page: "cursor", limit: "cursor" } } },
+				}),
+			"query.pagination.parameters must contain unique values",
+		],
+		[
+			"a meta formatter for a disabled mode",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					query: {
+						pagination: {
+							offset: true,
+							meta: { cursor: { schema: z.object({}), format: () => ({}) } },
+						},
+					},
+				}),
+			"query.pagination.meta.cursor needs cursor pagination enabled",
+		],
+		[
+			"an undeclared concurrency field",
+			() =>
+				defineCrudResource({
+					...validDefinition(),
+					concurrency: { field: "version" },
+				} as CrudResourceDefinition),
+			'concurrency.field references undeclared field "version"',
+		],
+		[
+			"an ID used as the version",
+			() => defineCrudResource({ ...validDefinition(), concurrency: { field: "id" } }),
+			"concurrency.field must be a dedicated version field",
+		],
 	] as const)("rejects %s", (_name, action, message) => {
 		expect(action).toThrowError(message);
 	});

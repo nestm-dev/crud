@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import "reflect-metadata";
 
-import { HttpStatus, Module, RequestMethod } from "@nestjs/common";
+import {
+	HttpStatus,
+	Module,
+	RequestMethod,
+	StandardSchemaSerializerInterceptor,
+	StandardSchemaValidationPipe,
+} from "@nestjs/common";
 import {
 	HTTP_CODE_METADATA,
 	METHOD_METADATA,
@@ -11,8 +17,7 @@ import {
 	SELF_DECLARED_DEPS_METADATA,
 	VERSION_METADATA,
 } from "@nestjs/common/constants";
-import { NestFactory } from "@nestjs/core";
-import { StandardSchemaModule } from "@nestm/standard-schema";
+import { APP_INTERCEPTOR, APP_PIPE, NestFactory, Reflector } from "@nestjs/core";
 import { CrudModule, crudOperations, defineCrudResource, getCrudServiceToken } from "@nestm/crud";
 import { MemoryCrudAdapter, bindMemoryCrud } from "@nestm/crud-memory";
 
@@ -144,7 +149,16 @@ assertRecord(swaggerOperation, "generated Swagger operation");
 assert.equal(swaggerOperation.operationId, "consumer-items_read");
 
 @Module({
-	imports: [StandardSchemaModule.forRoot(), CrudModule.forRoot(), feature],
+	imports: [CrudModule.forRoot(), feature],
+	// Nest 12's native Standard Schema pipe and serializer; no extra package is needed.
+	providers: [
+		{ provide: APP_PIPE, useValue: new StandardSchemaValidationPipe() },
+		{
+			provide: APP_INTERCEPTOR,
+			inject: [Reflector],
+			useFactory: (reflector: Reflector) => new StandardSchemaSerializerInterceptor(reflector),
+		},
+	],
 })
 class ConsumerSmokeModule {}
 
