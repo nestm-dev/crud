@@ -1,5 +1,33 @@
 # @nestm/crud-prisma
 
+## 0.1.0-alpha.17
+
+### Patch Changes
+
+- 92faaaf: Drop the unused `@nestm/standard-schema` peer from `@nestm/crud`; Nest 12's native
+  `StandardSchemaValidationPipe` and serializer are enough. Test against NestJS 12.5, Swagger 12.1,
+  TypeORM 1.1.3, and PostgreSQL 18, with a pnpm catalog keeping every workspace importer on one
+  `@nestjs/core`/`typeorm` instance (the cause of the Nest ≥ 12.0.3 `Reflector` resolution failure
+  and the TypeORM duplicate-instance typecheck errors).
+- 92faaaf: Add first-class optimistic concurrency with `concurrency: { field: "version" }`. Responses carry
+  `ETag`; PATCH, PUT, and DELETE require `If-Match` (absent → 428, stale → 412) and compare it with
+  the row read under a write lock, then pin the UPDATE/DELETE to that version so a lost race also
+  answers 412. Conditional PUT accepts `If-None-Match: *` for create-only. Adapters receive an
+  advisory `lock` on `findOne` (implemented by TypeORM), the conformance kit gains a
+  version-guard case, and Swagger documents the headers and the 412/428 responses.
+- 92faaaf: Add a pluggable per-resource list contract. `query.schema` binds one Standard Schema for the
+  whole list query through Nest's `@Query({ schema })` (validated by Nest, documented by Swagger),
+  and `query.toListQuery(parsed)` maps it to a parser-independent `CrudListRequest` (predicate AST,
+  order, offset page or keyset cursor). `CrudService.listQuery()` runs such a request directly,
+  skipping every grammar. The bracket grammar stays the default whenever `query.schema` is absent.
+  Bracket resources can rename `page`/`limit`/`after` with `query.pagination.parameters`, and any
+  resource can replace the page `meta` with `query.pagination.meta` formatters whose schemas drive
+  response validation and OpenAPI.
+- Updated dependencies [92faaaf]
+- Updated dependencies [92faaaf]
+- Updated dependencies [92faaaf]
+  - @nestm/crud@0.1.0-alpha.17
+
 ## 0.1.0-alpha.16
 
 ### Patch Changes
